@@ -9,6 +9,9 @@
   .panel.tall{min-height:470px}
   .controls .ctlLabel.hdr{font-weight:900}
   .controls .btnMini{padding:.35rem .55rem;font-size:.85rem}
+  /* 作図ステップの「なぜそうなるか」 */
+  .controls .note.reason{color:var(--text);opacity:.92;line-height:1.55;font-size:.88rem}
+  .controls .note.reason b{font-weight:800}
   @media (max-width:760px){
     .panel.mid{min-height:240px}
     .panel.half{min-height:200px}
@@ -153,6 +156,13 @@ function makeWaveCtl(ctx, parent, o) {
   };
 }
 
+/* 文字が枠に収まるフォントサイズを返す（狭い画面で注記がはみ出さないように） */
+function fitSize(cv, str, maxW, size, min = 9) {
+  const g = cv.ctx; let s = size;
+  while (s > min) { g.font = 'bold ' + s + 'px system-ui,sans-serif'; if (g.measureText(str).width + 10 <= maxW) break; s--; }
+  return s;
+}
+
 /* 壁の右（仮想領域）を薄く塗る */
 function shadeRight(cv, xw) {
   const g = cv.ctx; g.save();
@@ -173,6 +183,7 @@ function buildSuperpose(ctx) {
   ui.sep(ctx.controls);
   const w2 = makeWaveCtl(ctx, ctx.controls, { label: '波2（左へ）', color: C.wave2, shape: 'p:saw', A: 1.0, w: 1.5, lam: 2.0, v: 1.0, dir: -1, x0: 8.5, getCv: () => cv });
   ui.sep(ctx.controls);
+  ui.note(ctx.controls, '速さの注意：同じ媒質では波の速さは等しい（v₁ = v₂）。ここでの速さの違いはシミュレーション上の仮想操作です。');
 
   const t1 = ui.toggle(ctx.controls, { label: '波1', checked: true });
   const t2 = ui.toggle(ctx.controls, { label: '波2', checked: true });
@@ -191,14 +202,27 @@ function buildSuperpose(ctx) {
 
   periodHolder.sup = () => Math.max(0.2, Math.min(w1.period(), w2.period()));
 
+  /* パルスのリピート：両方のパルスが画面外へ出たら（＋1秒の余白）最初から。
+     t の純関数なので時間スクラブ・コマ送りと整合する。連続波のときはそのまま。 */
+  function loopT() {
+    if (!(w1.P.isPulse() && w2.P.isPulse())) return Infinity;
+    const p1 = w1.prm(), p2 = w2.prm();
+    const e1 = (V.x1 - p1.x0 + p1.w / 2) / Math.max(0.05, p1.v);   // 波1が右端を出る時刻
+    const e2 = (p2.x0 + p2.w / 2 - V.x0) / Math.max(0.05, p2.v);   // 波2が左端を出る時刻
+    return Math.max(1.0, Math.max(e1, e2) + 1.0);
+  }
+  const tLoop = t => { const TL = loopT(); return isFinite(TL) ? t - Math.floor(t / TL) * TL : t; };
+
   dbg.superpose = {
     y1: (x, t) => w1.y()(x, t), y2: (x, t) => w2.y()(x, t),
     ySum: (x, t) => w1.y()(x, t) + w2.y()(x, t),
+    tLoop, loopT,
     setShape1: v => { w1.P.sel.set(v); }, setShape2: v => { w2.P.sel.set(v); }
   };
 
   return {
-    draw(t) {
+    draw(tRaw) {
+      const t = tLoop(tRaw);
       const yM = Math.max(1.3, (Math.abs(w1.prm().A) + Math.abs(w2.prm().A)) * 1.25);
       cv.clear(); cv.setView({ x0: V.x0, x1: V.x1, y0: -yM, y1: yM });
       cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1 });
@@ -236,7 +260,17 @@ function buildReflect(ctx) {
     { label: '② 反射波をつくる', onClick: () => setStep(2) },
     { label: '③ 合成波', onClick: () => setStep(3) }
   ]);
-  function setStep(s) { step = s; stepBtns.forEach((b, i) => b.classList.toggle('active', i === s)); }
+  /* 作図の「なぜそうなるのか」＝手順と同じ画面に理由を置く（ステップごとに切り替え） */
+  const REASON = [
+    'いまは入射波だけ。このあと「壁に当たった波がどうなるか」を、理由をたどりながら作図でつくります。',
+    '<b>①なぜ延長するのか</b>：壁の向こうに波は実在しませんが、「もし壁がなかったら」の波を描いておくと、折り返しのもとになります（薄い線＝仮想の波）。',
+    '<b style="color:' + C.node + '">②固定端</b>：端は動けない（変位が常に0）。壁の向こうに<b>上下反転して折り返した仮想の波</b>を置くと、壁の位置で入射波と打ち消し合って常に0になる＝これが反射波。<br>' +
+    '<b style="color:' + C.anti + '">②自由端</b>：端は自由に動ける（端を引き戻す力がない）。壁について<b>線対称に折り返した仮想の波</b>を置くと、壁の位置で入射波と同じ変位が重なり傾きが0になる＝端が最大 2A まで動く。',
+    '<b>③なぜ足すのか</b>：重ね合わせの原理。実際に見える波（緑）は入射波と反射波の変位の和。壁より左だけが実在で、右は作図のための仮想領域です。'
+  ];
+  const reasonBox = document.createElement('div'); reasonBox.style.display = 'contents'; ctx.controls.appendChild(reasonBox);
+  function setReason(html) { reasonBox.textContent = ''; ui.note(reasonBox, html).classList.add('reason'); }
+  function setStep(s) { step = s; stepBtns.forEach((b, i) => b.classList.toggle('active', i === s)); setReason(REASON[s]); }
   setStep(3);
   ui.sep(ctx.controls);
   const tI = ui.toggle(ctx.controls, { label: '入射波', checked: true });
@@ -248,12 +282,20 @@ function buildReflect(ctx) {
 
   periodHolder.ref = () => Math.max(0.2, inc.period());
 
+  /* パルスのリピート：反射したパルスが実領域（壁より左）を通り過ぎたら（＋1秒）最初から。t の純関数。 */
+  function loopT() {
+    if (!inc.P.isPulse()) return Infinity;
+    const p = inc.prm();
+    return Math.max(1.0, (2 * L - p.x0 + p.w / 2 - V.x0) / Math.max(0.05, p.v) + 1.0);
+  }
+  const tLoop = t => { const TL = loopT(); return isFinite(TL) ? t - Math.floor(t / TL) * TL : t; };
+
   const yiFn = () => inc.y();
   const ySum = (end, x, t) => { const yi = yiFn(), s = (end === 'free' ? 1 : -1); return yi(x, t) + s * yi(2 * L - x, t); };
   dbg.reflect = {
     L, A: () => inc.prm().A, lam: () => inc.prm().lam, v: () => inc.prm().v,
     yi: (x, t) => yiFn()(x, t),
-    ySum,
+    ySum, tLoop, loopT,
     yWall: (end, t) => ySum(end, L, t),
     setShape: v => { inc.P.sel.set(v); },
     isPulse: () => inc.P.isPulse()
@@ -306,12 +348,24 @@ function buildReflect(ctx) {
     cv.textPx(end === 'free' ? '自由端：壁の位置は腹（変位の最大は 2A）' : '固定端：壁の位置は常に変位 0（節）',
       cv.pad.l + 6, cv.pad.t + 12, { align: 'left', color: end === 'free' ? C.anti : C.node, size: 13, bold: true });
     cv.textPx('y(L) = ' + fmt(yw, 2) + ' m', cv.px(L) - 8, cv.pad.t + cv.ih - 10, { align: 'right', color: C.wave, size: 13, bold: true });
+    // 作図ステップ②以降は「なぜその折り返しになるのか」を絵の上にも置く
+    if (step >= 2) {
+      const wide = cv.iw > 460;
+      const why = end === 'free'
+        ? (wide ? '端が自由に動ける（引き戻す力がない）→ 線対称に折り返す → 壁で同じ変位が重なり傾き0（最大 2A）'
+                : '端が自由 → 線対称に折り返す → 壁で最大 2A')
+        : (wide ? '端が動けない（変位が常に0）→ 上下反転して折り返す → 壁で打ち消し合って常に0'
+                : '端は動けない → 上下反転して折り返す → 壁で0');
+      cv.textPx(why, cv.pad.l + 6, cv.pad.t + 30,
+        { align: 'left', color: end === 'free' ? C.anti : C.node, size: fitSize(cv, why, cv.iw - 12, 12), bold: true });
+    }
     inc.P.drawLive(cv);
     return yw;
   }
 
   return {
-    draw(t) {
+    draw(tRaw) {
+      const t = tLoop(tRaw);
       roF.set(fmt(drawEnd(cvF, 'free', t), 3) + ' m');
       roX.set(fmt(drawEnd(cvX, 'fixed', t), 3) + ' m');
     }
@@ -348,10 +402,12 @@ function buildStanding(ctx) {
   const t2 = ui.toggle(g1, { label: '波2', checked: true });
   const tS = ui.toggle(g1, { label: '合成波', checked: true });
   const tE = ui.toggle(g1, { label: '包絡線', checked: true });
-  const tM = ui.toggle(g1, { label: '節○・腹▲', checked: true });
+  const tM = ui.toggle(g1, { label: '節・腹', checked: true });
   const roN = ui.readout(g1, { label: '節の変位', value: '—' });
   const roL = ui.readout(g1, { label: '状態', value: '—' });
   ui.note(g1, '速さの注意：同じ媒質では波の速さは等しい（v₁ = v₂）。ここでの速さの違いはシミュレーション上の仮想操作です。速さ・振幅・振動数の3つがそろったときだけ定在波になります。');
+  ui.formula(ctx.detail, '教材1の位相：y₁ + y₂ = A sin2π(t/T − x/λ) + A sin2π(t/T + x/λ) = <b>2A sin(2πt/T) · cos(2πx/λ)</b>　（和積の公式）');
+  ui.note(ctx.detail, '時間の部分 sin(2πt/T) と場所の部分 cos(2πx/λ) が分かれる＝波形は左右に進まず、各点が「その場所ごとの振幅 2A cos(2πx/λ)」で単振動する。cos(2πx/λ) = 0 になる場所が節（動かない）、|cos(2πx/λ)| = 1 になる場所が腹（最大 2A で動く）。3量のどれかがずれるとこの形に因数分解できず、節が止まらない／模様が流れる。');
 
   /* --- 教材2 --- */
   const g2 = document.createElement('div'); g2.style.display = 'contents'; ctx.controls.appendChild(g2);
@@ -398,24 +454,34 @@ function buildStanding(ctx) {
     cv.clear(); cv.setView(V);
     cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1, yStep: 1 });
     const lam = lamOf(v1.get(), f1.get()), A = a1.get(), ok = matched();
+    const ghost = ok ? 1 : 0.35;   // 不一致でも「波1の条件で計算した節・腹の位置」を薄く残す
     cv.clip(() => {
-      if (ok && tE.get()) {
-        cv.plot(x => 2 * A * Math.cos(TAU * x / lam), { color: C.guide, width: 1.6, dash: [5, 5], alpha: .75 });
-        cv.plot(x => -2 * A * Math.cos(TAU * x / lam), { color: C.guide, width: 1.6, dash: [5, 5], alpha: .75 });
+      if (tE.get()) {
+        const ea = ok ? .75 : .26;
+        cv.plot(x => 2 * A * Math.cos(TAU * x / lam), { color: C.guide, width: 1.6, dash: [5, 5], alpha: ea });
+        cv.plot(x => -2 * A * Math.cos(TAU * x / lam), { color: C.guide, width: 1.6, dash: [5, 5], alpha: ea });
       }
       if (tS.get()) cv.plot(x => Y1(x, t) + Y2(x, t), { color: C.wave, width: 4.0 });
       if (t1.get()) cv.plot(x => Y1(x, t), { color: C.wave1, width: 2.0, dash: [7, 4] });
       if (t2.get()) cv.plot(x => Y2(x, t), { color: C.wave2, width: 2.0, dash: [7, 4] });
-      if (ok && tM.get()) {
-        for (let x = lam / 4; x <= V.x1; x += lam / 2) { cv.dot(x, 0, 6, { color: '#0b1510', stroke: C.node, width: 2.5 }); }
-        for (let x = 0; x <= V.x1; x += lam / 2) {
-          const X = cv.px(x), Y = cv.py(0);
-          const g = cv.ctx; g.fillStyle = C.anti; g.beginPath(); g.moveTo(X, Y - 9); g.lineTo(X - 7, Y + 3); g.lineTo(X + 7, Y + 3); g.closePath(); g.fill();
+      if (tM.get()) {
+        const g = cv.ctx; g.save(); g.globalAlpha = ghost;
+        const xEnd = V.x1 - 0.45;   // 右端の x 軸ラベルに重ねない
+        for (let x = lam / 4; x <= xEnd; x += lam / 2) cv.text('節', x, 0, { color: C.node, size: 13, bold: true, dy: -11 });
+        for (let x = 0; x <= xEnd; x += lam / 2) cv.text('腹', x, 0, { color: C.anti, size: 13, bold: true, dy: -11 });
+        g.restore();
+        // 不一致のとき：節のはずの位置で実際の変位が0でないことを線で示す
+        if (!ok) {
+          for (let xn = lam / 4; xn <= V.x1; xn += lam / 2) {
+            const yn = Y1(xn, t) + Y2(xn, t);
+            cv.line(xn, 0, xn, yn, { color: C.wave2, width: 2 });
+            cv.dot(xn, yn, 4, { color: C.wave2 });
+          }
         }
       }
     });
     if (ok) {
-      cv.hbracket(lam / 4, lam / 4 + lam / 2, -2.35, '節と節の間隔 λ/2 = ' + fmt(lam / 2, 2) + ' m', { color: C.node });
+      cv.hbracket(lam / 4, lam / 4 + lam / 2, -2.35, '節と節の間隔 λ/2 = ' + fmt(lam / 2, 2) + ' m', { color: C.guide });
       cv.textPx('包絡線 ±2A cos(2πx/λ)　（2A = ' + fmt(2 * A, 2) + ' m）', cv.pad.l + 6, cv.pad.t + 12, { align: 'left', color: C.guide, size: 12, bold: true });
       const xn = lam / 4, yn = Y1(xn, t) + Y2(xn, t);
       roN.set(fmt(yn, 6) + ' m（x = ' + fmt(xn, 2) + ' m）');
@@ -426,6 +492,8 @@ function buildStanding(ctx) {
       roN.set(fmt(yn, 6) + ' m（x = ' + fmt(xn, 2) + ' m）');
       roL.set('定在波ではありません');
       cv.textPx('速さ・振幅・振動数が一致していないので定在波ではありません', cv.pad.l + cv.iw - 6, cv.pad.t + 12, { align: 'right', color: C.wave2, size: 13, bold: true });
+      const msg = '薄い「節」「腹」＝波1の条件で計算した位置。節のはずの場所でも変位が0になっていない（赤い線）';
+      cv.textPx(msg, cv.pad.l + 6, cv.pad.t + 30, { align: 'left', color: C.muted, size: fitSize(cv, msg, cv.iw - 12, 12) });
     }
   }
 
@@ -447,17 +515,16 @@ function buildStanding(ctx) {
       cv.plot(x => -2 * A * Math.abs(envF(TAU * (L - x) / lam)), { color: C.guide, width: 1.4, dash: [5, 5], alpha: .55, x0: V.x0, x1: L });
       // 壁からの節・腹（λ/4 刻み）
       const nodeOff = (end === 'free') ? lam / 4 : 0;   // 壁から節までの距離
-      for (let d = nodeOff; d <= L - V.x0; d += lam / 2) { if (L - d >= V.x0) cv.dot(L - d, 0, 6, { color: '#0b1510', stroke: C.node, width: 2.5 }); }
+      for (let d = nodeOff; d <= L - V.x0; d += lam / 2) { if (L - d >= V.x0) cv.text('節', L - d, 0, { color: C.node, size: 13, bold: true, dy: -11 }); }
       const antiOff = (end === 'free') ? 0 : lam / 4;
       for (let d = antiOff; d <= L - V.x0; d += lam / 2) {
         const x = L - d; if (x < V.x0) continue;
-        const X = cv.px(x), Y = cv.py(0), g = cv.ctx;
-        g.fillStyle = C.anti; g.beginPath(); g.moveTo(X, Y - 9); g.lineTo(X - 7, Y + 3); g.lineTo(X + 7, Y + 3); g.closePath(); g.fill();
+        cv.text('腹', x, 0, { color: C.anti, size: 13, bold: true, dy: -11 });
       }
     });
     cv.line(L, V.y0, L, V.y1, { color: '#e8fff2', width: 3 });
-    cv.hbracket(L - lam / 4, L, 2.05, 'λ/4', { color: C.node });
-    cv.hbracket(L - lam / 2, L, 2.45, 'λ/2', { color: C.anti });
+    cv.hbracket(L - lam / 4, L, 2.05, 'λ/4', { color: C.guide });
+    cv.hbracket(L - lam / 2, L, 2.45, 'λ/2', { color: C.guide });
     cv.textPx(end === 'free' ? '自由端：壁が腹（変位の最大 2A = ' + fmt(2 * A, 1) + ' m）' : '固定端：壁が節（常に変位 0）',
       cv.pad.l + 6, cv.pad.t + 12, { align: 'left', color: end === 'free' ? C.anti : C.node, size: 13, bold: true });
     cv.textPx('仮想の領域', (cv.px(L) + cv.px(V.x1)) / 2, cv.pad.t + 12, { color: C.muted, size: 12, bg: false });
@@ -476,17 +543,39 @@ function buildLT(ctx) {
   const sLam = ui.slider(ctx.controls, { label: '波長 λ', min: 1.0, max: 4.0, step: 0.5, value: 2.0, unit: 'm', digits: 1 });
   const sT = ui.slider(ctx.controls, { label: '周期 T', min: 1.0, max: 4.0, step: 0.5, value: 2.0, unit: 's', digits: 1 });
   const sA = ui.slider(ctx.controls, { label: '振幅 A', min: 0.01, max: 0.12, step: 0.005, value: 0.075, unit: 'm', digits: 3 });
-  const tM = ui.toggle(ctx.controls, { label: '節○・腹▲の縦線', checked: true });
+  const tM = ui.toggle(ctx.controls, { label: '節・腹の縦線', checked: true });
   const tL = ui.toggle(ctx.controls, { label: '疎・密ラベル', checked: true });
+  const tC = ui.toggle(ctx.controls, { label: '成分波を表示（②）', checked: false });
   ui.note(ctx.controls, '変位の節（玉がほとんど動かない位置）＝疎密の変化が最大。変位の腹（玉が大きく動く位置）＝疎密は変化しない。玉の間隔は 0.25 m、x軸の正の向きは右。');
+  ui.formula(ctx.detail, '疎密（圧力）∝ −∂ξ/∂x　／　媒質の速度 = ∂ξ/∂t');
+  ui.note(ctx.detail, '疎密：変位 ξ が右上がり（∂ξ/∂x が正）の場所は右の玉ほど右へ寄る＝間隔が広がって疎、右下がりの場所は間隔が縮んで密。だから圧力変化はマイナスの傾きに比例する。媒質の速度：②の曲線の「傾き」ではなく、各点の変位が時間とともに変わる速さ。変位が0を通る瞬間に速さが最大、変位が最大の瞬間に速さは0。');
+  ui.note(ctx.detail, 'この画面の定在波は、右へ進む縦波 ξ₁ と左へ進む縦波 ξ₂ の和として計算しています（2A sin·cos の式を直接描いていません）。「成分波を表示」で ξ₁（青破線）と ξ₂（赤破線）が見えます。');
 
   periodHolder.lt = () => sT.get();
 
-  const XI = (x, t, lam, T, A) => 2 * A * Math.sin(TAU * x / lam) * Math.cos(TAU * t / T);
-  const VX = (x, t, lam, T, A) => -2 * A * (TAU / T) * Math.sin(TAU * x / lam) * Math.sin(TAU * t / T);
-  const DENS = (x, t, lam, T, A) => -2 * A * (TAU / lam) * Math.cos(TAU * x / lam) * Math.cos(TAU * t / T);
+  /* 定在波は「右へ進む縦波」と「左へ進む縦波」の和として計算する（閉じた式は直描きしない）。
+     ξ₁ = A sin2π(t/T − x/λ)（右へ）、ξ₂ = −A sin2π(t/T + x/λ)（左へ：固定端の反射で位相がπずれた波）
+     和 = −2A cos(2πt/T) sin(2πx/λ) → x = 0, λ/2, λ, … が節。 */
+  const XI1 = (x, t, lam, T, A) => A * Math.sin(TAU * (t / T - x / lam));
+  const XI2 = (x, t, lam, T, A) => -A * Math.sin(TAU * (t / T + x / lam));
+  const XI = (x, t, lam, T, A) => XI1(x, t, lam, T, A) + XI2(x, t, lam, T, A);
+  /* 速度・疎密も成分波ごとの微分の和（∂ξ/∂t と −∂ξ/∂x） */
+  const VX1 = (x, t, lam, T, A) => A * (TAU / T) * Math.cos(TAU * (t / T - x / lam));
+  const VX2 = (x, t, lam, T, A) => -A * (TAU / T) * Math.cos(TAU * (t / T + x / lam));
+  const VX = (x, t, lam, T, A) => VX1(x, t, lam, T, A) + VX2(x, t, lam, T, A);
+  const DN1 = (x, t, lam, T, A) => A * (TAU / lam) * Math.cos(TAU * (t / T - x / lam));
+  const DN2 = (x, t, lam, T, A) => A * (TAU / lam) * Math.cos(TAU * (t / T + x / lam));
+  const DENS = (x, t, lam, T, A) => DN1(x, t, lam, T, A) + DN2(x, t, lam, T, A);
 
-  dbg.ltstanding = { xi: (x, t) => XI(x, t, sLam.get(), sT.get(), sA.get()), lambda: () => sLam.get() };
+  dbg.ltstanding = {
+    xi: (x, t) => XI(x, t, sLam.get(), sT.get(), sA.get()),
+    xi1: (x, t) => XI1(x, t, sLam.get(), sT.get(), sA.get()),
+    xi2: (x, t) => XI2(x, t, sLam.get(), sT.get(), sA.get()),
+    vx: (x, t) => VX(x, t, sLam.get(), sT.get(), sA.get()),
+    dens: (x, t) => DENS(x, t, sLam.get(), sT.get(), sA.get()),
+    lambda: () => sLam.get(),
+    components: b => tC.set(b)
+  };
 
   const PADL = 58, PADR = 14, TOP = 2, BOT = 2;
   function band(k) {
@@ -532,8 +621,16 @@ function buildLT(ctx) {
       cv.clip(() => {
         cv.plot(x => 2 * A * Math.sin(TAU * x / lam), { color: C.guide, width: 1.3, dash: [5, 5], alpha: .5 });
         cv.plot(x => -2 * A * Math.sin(TAU * x / lam), { color: C.guide, width: 1.3, dash: [5, 5], alpha: .5 });
+        if (tC.get()) {
+          cv.plot(x => XI1(x, t, lam, T, A), { color: C.wave1, width: 1.8, dash: [7, 4] });
+          cv.plot(x => XI2(x, t, lam, T, A), { color: C.wave2, width: 1.8, dash: [7, 4] });
+        }
         cv.plot(xi, { color: C.wave, width: 3.2 });
       });
+      if (tC.get()) {
+        const lg = '青破線 ξ₁（右へ）＋ 赤破線 ξ₂（左へ）＝ 緑の定在波';
+        cv.textPx(lg, cv.pad.l + cv.iw - 4, b.top + 9, { align: 'right', color: C.muted, size: fitSize(cv, lg, cv.iw * 0.6, 12) });
+      }
       const markY = cv.py(0);
       const markPx = [];
       for (let x = 0; x <= X1 + 1e-9; x += lam / 2) markPx.push(['n', cv.px(x)]);
@@ -558,11 +655,10 @@ function buildLT(ctx) {
       if (tM.get()) {
         for (const [kind, X] of markPx) {
           cv.linePx(X, bandTop, X, bandBot, { color: kind === 'n' ? C.node : C.anti, width: 1.2, dash: [4, 4], alpha: .35 });
-          if (kind === 'n') cv.dotPx(X, markY, 6, { color: '#0b1510', stroke: C.node, width: 2.5 });
-          else { const g = cv.ctx; g.fillStyle = C.anti; g.beginPath(); g.moveTo(X, markY - 9); g.lineTo(X - 7, markY + 3); g.lineTo(X + 7, markY + 3); g.closePath(); g.fill(); }
+          cv.textPx(kind === 'n' ? '節' : '腹', X, markY, { color: kind === 'n' ? C.node : C.anti, size: 13, bold: true });
         }
       }
-      cv.textPx('変位の節○＝疎密の変化が最大／変位の腹▲＝疎密は変化しない', cv.pad.l + cv.iw - 4, bandTop + 10, { align: 'right', color: C.text, size: 12 });
+      cv.textPx('変位の節＝疎密の変化が最大／変位の腹＝疎密は変化しない', cv.pad.l + cv.iw - 4, bandTop + 10, { align: 'right', color: C.text, size: 12 });
     }
   };
 }
@@ -573,9 +669,9 @@ Nami.init({
   footer: '重ね合わせの原理・波の独立性・反射（自由端／固定端）・定在波・縦波の定在波。',
   tabs: [
     { id: 'superpose', label: '9 重ね合わせ', period: () => (periodHolder.sup ? periodHolder.sup() : 2), build: buildSuperpose },
-    { id: 'reflect', label: 'R 反射', period: () => (periodHolder.ref ? periodHolder.ref() : 2), build: buildReflect },
-    { id: 'standing', label: '10 定在波', period: () => (periodHolder.std ? periodHolder.std() : 2), build: buildStanding },
-    { id: 'ltstanding', label: '11 縦波の定在波', period: () => (periodHolder.lt ? periodHolder.lt() : 2), build: buildLT }
+    { id: 'reflect', label: '10 反射', period: () => (periodHolder.ref ? periodHolder.ref() : 2), build: buildReflect },
+    { id: 'standing', label: '11 定在波', period: () => (periodHolder.std ? periodHolder.std() : 2), build: buildStanding },
+    { id: 'ltstanding', label: '12 縦波の定在波', period: () => (periodHolder.lt ? periodHolder.lt() : 2), build: buildLT }
   ]
 });
 })();
