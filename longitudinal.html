@@ -10,12 +10,22 @@
   .stage.rows4 .panel canvas{min-height:86px}
   .stage.rows2{flex:1}
   .stage.rows2 .panel{min-height:190px}
-  .stage.earth{flex:1}
-  .stage.earth .panel{min-height:420px}
+  /* 7 地震: 地球の図を主役にする。操作子は ctx.layout('side') で右列へ寄せてあるので、
+     図のパネルは正方形に近い形で縦いっぱいに広げる（v(r) グラフを出したときだけ横2枚に戻す）。 */
+  .view.side{--earthH:min(66vh,780px)}
+  .stage.earth,.view.side .stage.earth{flex:1;min-height:var(--earthH,520px)}
+  .view.side .controls:not(.detail){max-height:var(--earthH)}   /* 右列が伸びて図を押し出さないように（中はスクロール） */
+  .stage.earth .panel{min-height:0}
+  .stage.earth:not(.cols2) .panel{justify-self:center;width:auto;height:100%;aspect-ratio:1/1;max-width:100%}
   .panel .overlay{top:auto;bottom:.4rem;right:.6rem}
   .controls .tag{color:var(--muted);font-size:.85rem;border:1px solid var(--line);border-radius:6px;padding:.1rem .4rem}
   .controls .bigread{font-weight:900;color:var(--yellow);font-variant-numeric:tabular-nums;font-size:1.05rem}
-  @media (max-width:760px){ .stage.earth .panel{min-height:400px} .stage.rows4 .panel canvas{min-height:74px} }
+  @media (max-width:760px){
+    .view.side{--earthH:min(62vh,520px)}
+    .view.side .controls:not(.detail){max-height:none}
+    .stage.earth:not(.cols2) .panel{width:100%;height:100%;aspect-ratio:auto}
+    .stage.rows4 .panel canvas{min-height:74px}
+  }
 </style>
 </head><body>
 <script src="common.js"></script>
@@ -328,42 +338,97 @@ function critAngle(kind, r0, ds, pred) {
   for (let i = 0; i < 34; i++) { const m = (lo + hi) / 2; if (pred(traceRay(kind, r0, m, { ds, keep: false }))) lo = m; else hi = m; }
   return hi;
 }
+// 走時 τ から道すじ上の位置を出す（τ は単調に増えるので二分探索）。もう終点に着いていれば null
+function posAtTau(path, te) {
+  const n = path.length;
+  if (!(te >= 0) || n < 2) return null;
+  if (te >= path[n - 1][2]) return null;          // 地表（S は外核境界）に着いてしまった
+  if (te <= path[0][2]) return [path[0][0], path[0][1]];
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (path[m][2] <= te) lo = m; else hi = m; }
+  const a = path[lo], b = path[hi], f = (te - a[2]) / Math.max(1e-9, b[2] - a[2]);
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+}
+// 道すじのうち「波がもう通りすぎた部分」（濃く描く用）
+function passedPart(path, te) {
+  const out = [];
+  for (let i = 0; i < path.length; i++) {
+    if (path[i][2] <= te) { out.push(path[i]); continue; }
+    const a = path[i - 1];
+    if (a) {
+      const f = (te - a[2]) / Math.max(1e-9, path[i][2] - a[2]);
+      out.push([a[0] + (path[i][0] - a[0]) * f, a[1] + (path[i][1] - a[1]) * f]);
+    }
+    break;
+  }
+  return out;
+}
+// 波面を計算するための射出角の並び。
+//   0°付近＝真下、90°＝真横、180°付近＝真上（震源のすぐ上の地表へ）。上向きも入れないと波面が地表まで届かない。
+//   「ここを境に道すじが急に変わる」角（外核・内核の入口）のまわりは指数的に細かく刻む＝波面に段差が出ない。
+function frontAngles(crits) {
+  const a = [], DOWN = 400, UP = 120;
+  for (let k = 0; k <= DOWN; k++) a.push(0.12 + (89.94 - 0.12) * k / DOWN);
+  for (let k = 0; k <= UP; k++) a.push(90.06 + (179.88 - 90.06) * k / UP);
+  for (const c of crits) if (c > 0.3 && c < 89.6)
+    for (let j = 1; j <= 34; j++) { const e = 0.6 * Math.pow(0.72, j); a.push(c - e); a.push(c + e); }
+  return a.filter(x => x > 0.05 && x < 179.95).sort((x, y) => x - y);
+}
 
-const SPEEDS = [60, 120, 300, 600];
-const SEIS = { scale: 60 };   // 再生速度（画面の1秒＝実際の SEIS.scale 秒）。タブの period() と共有する
+const SPEEDS = [15, 30, 60, 120, 300, 600];
+const SEIS = { scale: 60, tEnd: 1800 };  // scale=再生速度（画面の1秒＝実際の scale 秒）／tEnd=リピートまでの地震時間 [s]
+const SEIS_TAIL = 120;                   // 波が通りぬけてからリピートするまでの余裕（既定 ×60 で約2秒ぶん）
+const FRONT_GAP = 420;                   // km。これ以上はなれた隣どうしは「屈折で波面が裂けた所」として細い破線でつなぐ
+const BRIDGE_MAX = 3500;                 // km。裂け目がこれより広がったらもう線ではつながない（別々の波面として描く）
 
 function buildSeismic(ctx) {
   let depth = 15, nRays = 36;
-  let showP = true, showS = true, showFront = true, showShadow = true, showVprof = false;
+  let showPRay = true, showPFront = true, showSRay = true, showSFront = true, showPShadow = true, showSShadow = true, showVprof = false;
   let obsTh = 75 / DEG;
-  ctx.layout('1'); ctx.stage.classList.add('earth');
+  ctx.layout('side'); ctx.stage.classList.add('earth');
 
-  const cv = ctx.canvas({ title: '地球の断面（模式図）— 震源から出た P波・S波の道すじ' });
+  const cv = ctx.canvas({ title: '地球の断面（模式図）— P波・S波の道すじと波面' });
+  cv.setPad({ l: 6, r: 6, t: 6, b: 6 });
   const cvV = ctx.canvas({ title: '地震波の速度分布 v(r)（PREM 簡略）', maximizable: false });
   cvV.box.hidden = true;
 
-  let RAYS = { P: [], S: [] }, ARR = { P: [], S: [] }, BND = null, busy = false;
+  let RAYS = { P: [], S: [] }, ARR = { P: [], S: [] }, BND = null, CRIT = null, busy = false;
+  let FRONT = { P: [], S: [] }, frontJob = null, frontReady = false;
 
+  /* --- 表示用の波線（道すじ）。1本も途中で捨てない --- */
   function rebuildRays() {
     const r0 = ER - depth;
     for (const kind of ['P', 'S']) {
       const list = [];
       for (let k = 0; k < nRays; k++) {
         const a = 0.6 + (89.4 - 0.6) * k / (nRays - 1);
-        const r = traceRay(kind, r0, a, { ds: 10 });    // 波線は1本も途中で捨てない
-        const path = toPath(r.raw, 150);
-        list.push({ a, end: r.end, delta: r.delta, tau: r.tau, inner: !!(r.enteredInner || r.bouncedICB),
-                    path, pathM: path.map(q => [-q[0], q[1], q[2]]) });
+        const r = traceRay(kind, r0, a, { ds: 10 });
+        list.push({ a, end: r.end, delta: r.delta, tau: r.tau, inner: !!(r.enteredInner || r.bouncedICB), path: toPath(r.raw, 240) });
       }
       RAYS[kind] = list;
     }
-    window.__nami_debug = Object.assign(window.__nami_debug || {}, {
-      rays: { P: RAYS.P.map(r => ({ end: r.end, d: r.delta, inner: r.inner })),
-              S: RAYS.S.map(r => ({ end: r.end, d: r.delta, inner: r.inner })) } });
+    pushDebug();
   }
+  function pushDebug() {
+    const info = list => list.map(r => {
+      const q = r.path[r.path.length - 1];
+      let gap = 0;
+      for (let i = 1; i < r.path.length; i++) gap = Math.max(gap, Math.hypot(r.path[i][0] - r.path[i - 1][0], r.path[i][1] - r.path[i - 1][1]));
+      return { end: r.end, d: r.delta, inner: r.inner, rEnd: Math.hypot(q[0], q[1]), maxGap: gap };
+    });
+    window.__nami_debug = Object.assign(window.__nami_debug || {}, {
+      rays: { P: info(RAYS.P), S: info(RAYS.S) },
+      seis: {
+        get frontReady() { return frontReady; }, get tEnd() { return SEIS.tEnd; }, get scale() { return SEIS.scale; },
+        get nFront() { return { P: FRONT.P.length, S: FRONT.S.length }; },
+        front: (kind, te) => frontRuns(FRONT[kind] || [], te).map(run => run.map(p => [p[0], p[1], !!p[2]]))
+      }
+    });
+  }
+
+  /* --- 走時表・シャドーゾーン --- */
   function rebuildAnalysis() {
     const r0 = ER - depth, ds = 16;
-    // 走時表（Δ→τ の補間用）
     for (const kind of ['P', 'S']) {
       const list = [];
       for (let k = 0; k <= 170; k++) {
@@ -373,15 +438,18 @@ function buildSeismic(ctx) {
       }
       ARR[kind] = list;
     }
-    // シャドーゾーン境界
     const aP = critAngle('P', r0, ds, r => r.enteredCore);
     const dP = traceRay('P', r0, aP, { ds, keep: false }).delta;
+    const aICB = critAngle('P', r0, ds, r => r.enteredInner);
     const aS = critAngle('S', r0, ds, r => r.end !== 'surface');
     const dS = traceRay('S', r0, aS, { ds, keep: false }).delta;
+    CRIT = { pCore: aP, pInner: aICB, s: aS };
     // 外核だけを通りぬける P（PKP）。内核を通る/内核ではね返る「弱い P」は帯の定義から外す。
-    const fd = a => { const r = traceRay('P', r0, a, { ds, keep: false });
-      return (r.end === 'surface' && r.enteredCore && !r.enteredInner && !r.bouncedICB) ? r.delta : 1e9; };
-    let ba = aP / 2, bd = 1e9, M = 90;
+    const fd = a => {
+      const r = traceRay('P', r0, a, { ds, keep: false });
+      return (r.end === 'surface' && r.enteredCore && !r.enteredInner && !r.bouncedICB) ? r.delta : 1e9;
+    };
+    let ba = aP / 2, bd = 1e9; const M = 90;
     for (let k = 0; k <= M; k++) { const a = 0.02 + (aP - 0.02) * k / M, d = fd(a); if (d < bd) { bd = d; ba = a; } }
     let lo = ba - (aP - 0.02) / M, hi = ba + (aP - 0.02) / M;
     for (let it = 0; it < 28; it++) { const m1 = lo + (hi - lo) * .382, m2 = lo + (hi - lo) * .618; if (fd(m1) < fd(m2)) hi = m2; else lo = m1; }
@@ -397,8 +465,67 @@ function buildSeismic(ctx) {
       `S の影が ${fmt(BND.sStart, 1)}° 以遠になるのは、液体の外核を S 波が通れず、外核にぶつかった波線がそこで終わるから（波線上の × 印）。` +
       `なお帯の中がまったくの無音ではない：内核を通った（または内核の表面ではね返った）弱い P が届く。帯は「マントルだけを通る P も、外核を通りぬける P（PKP）も届かない範囲」という意味。`
     );
+    startFront();
   }
   function rebuildAll() { if (busy) return; busy = true; rebuildRays(); rebuildAnalysis(); busy = false; }
+
+  /* --- 波面用の細かい波線を、画面を止めずに少しずつ計算する --- */
+  function startFront() {
+    frontReady = false;
+    frontJob = {
+      r0: ER - depth, qi: 0, queue: [
+        { kind: 'P', angles: frontAngles([CRIT.pCore, CRIT.pInner]), out: [], i: 0 },
+        { kind: 'S', angles: frontAngles([CRIT.s]), out: [], i: 0 }]
+    };
+  }
+  function stepFront(ms) {
+    if (!frontJob) return;
+    const t0 = performance.now();
+    while (frontJob.qi < frontJob.queue.length) {
+      const job = frontJob.queue[frontJob.qi];
+      while (job.i < job.angles.length) {
+        const a = job.angles[job.i++];
+        const r = traceRay(job.kind, frontJob.r0, a, { ds: 12 });
+        job.out.push({ a, end: r.end, tau: r.tau, path: toPath(r.raw, 200) });
+        if (performance.now() - t0 > ms) return;
+      }
+      frontJob.qi++;
+    }
+    FRONT = { P: frontJob.queue[0].out, S: frontJob.queue[1].out };
+    let mx = 0;
+    for (const k of ['P', 'S']) for (const r of FRONT[k]) if (r.end === 'surface' || r.end === 'cmb') mx = Math.max(mx, r.tau);
+    SEIS.tEnd = Math.max(600, Math.round(mx)) + SEIS_TAIL;   // いちばん遅い波が着く時刻＋余裕＝リピート周期
+    frontJob = null; frontReady = true; pushDebug();
+  }
+
+  // 時刻 te の波面。射出角の順に点をつなぎ、着いてしまった波線の所では終点（地表・外核境界）で閉じる。
+  // 返り値は [[x, y, bridge], …] の並び。bridge=true は「その手前の点とのあいだが外核の屈折で裂けた所」＝破線でつなぐ。
+  function frontRuns(list, te) {
+    const n = list.length; if (!n) return [];
+    const pos = [], endp = [];
+    for (let i = 0; i < n; i++) {
+      pos.push(posAtTau(list[i].path, te));
+      const p = list[i].path[list[i].path.length - 1]; endp.push([p[0], p[1]]);
+    }
+    const runs = []; let run = null;
+    const flush = () => { if (run && run.length > 1) runs.push(run); run = null; };
+    // つなぎ方は1か所だけで決める: 近ければ実線、裂けていれば破線、開きすぎたらつながない
+    const join = (x, y) => {
+      const last = run && run.length ? run[run.length - 1] : null;
+      if (!last) { run = run || []; run.push([x, y, false]); return; }
+      const g = Math.hypot(x - last[0], y - last[1]);
+      if (g > BRIDGE_MAX) { flush(); run = [[x, y, false]]; return; }
+      run.push([x, y, g > FRONT_GAP]);
+    };
+    for (let i = 0; i < n; i++) {
+      const p = pos[i];
+      if (!p) { if (run) { join(endp[i][0], endp[i][1]); flush(); } continue; }   // 波面はその境界（地表・外核）で終わる
+      if (!run) { run = []; if (i > 0 && !pos[i - 1]) join(endp[i - 1][0], endp[i - 1][1]); }
+      join(p[0], p[1]);
+    }
+    flush();
+    return runs;
+  }
 
   // Δ に最初に着く波。inner=true なら「内核を通った（はね返った）弱い P」しか来ていない。
   function firstArrival(list, d) {
@@ -413,61 +540,130 @@ function buildSeismic(ctx) {
     return best == null ? null : { t: best, inner };
   }
 
-  /* --- 操作パネル --- */
+  /* --- 操作パネル（既定） --- */
   ui.buttons(ctx.controls, '表示', []);
-  ui.toggle(ctx.controls, { label: 'P波（青）', checked: showP, onChange: v => showP = v });
-  ui.toggle(ctx.controls, { label: 'S波（赤）', checked: showS, onChange: v => showS = v });
-  ui.toggle(ctx.controls, { label: '波面', checked: showFront, onChange: v => showFront = v });
-  ui.toggle(ctx.controls, { label: 'シャドーゾーン', checked: showShadow, onChange: v => showShadow = v });
+  ui.toggle(ctx.controls, { label: 'P波の射線（道すじ）', checked: showPRay, onChange: v => showPRay = v });
+  ui.toggle(ctx.controls, { label: 'P波の波面', checked: showPFront, onChange: v => showPFront = v });
+  ui.toggle(ctx.controls, { label: 'S波の射線（道すじ）', checked: showSRay, onChange: v => showSRay = v });
+  ui.toggle(ctx.controls, { label: 'S波の波面', checked: showSFront, onChange: v => showSFront = v });
+  ui.toggle(ctx.controls, { label: 'P波の影（シャドーゾーン）', checked: showPShadow, onChange: v => showPShadow = v });
+  ui.toggle(ctx.controls, { label: 'S波の影（シャドーゾーン）', checked: showSShadow, onChange: v => showSShadow = v });
   ui.sep(ctx.controls);
-  const sD = ui.slider(ctx.controls, { label: '震源の深さ', min: 0, max: 700, step: 5, value: depth, unit: 'km', digits: 0,
-    onInput: v => { depth = v; rebuildRays(); } });
+  const sD = ui.slider(ctx.controls, {
+    label: '震源の深さ', min: 0, max: 700, step: 5, value: depth, unit: 'km', digits: 0,
+    onInput: v => { depth = v; rebuildRays(); }
+  });
   sD.el.addEventListener('change', () => rebuildAnalysis());
-  ui.slider(ctx.controls, { label: '再生速度', min: 0, max: SPEEDS.length - 1, step: 1, value: 0,
-    fmt: v => `×${SPEEDS[v]}（画面の1秒＝実際の${SPEEDS[v]}秒）`,
+  ui.slider(ctx.controls, {
+    label: '再生速度', min: 0, max: SPEEDS.length - 1, step: 1, value: SPEEDS.indexOf(60),
+    fmt: v => `×${SPEEDS[Math.round(v)]}（画面の1秒＝実際の${SPEEDS[Math.round(v)]}秒）`,
     onInput: v => {
       const old = SEIS.scale, nw = SPEEDS[Math.round(v)];
       if (nw !== old) { SEIS.scale = nw; ctx.sim.setT(ctx.sim.t * old / nw); }   // 地震の時刻を保ったまま速さだけ変える
-    } });
+    }
+  });
+  ui.sep(ctx.controls);
   const readShadow = ui.readout(ctx.controls, { label: 'この速度分布から計算した影', value: '計算中…' });
-  const noteWhy = ui.note(ctx.controls, '');
-  ui.note(ctx.controls, '灰色の●＝震源（上下にドラッグで深さを変える）／黄色の●＝観測点（地表をドラッグ）。');
+  const readObs = ui.readout(ctx.controls, { label: '観測点', value: '' });
+  const readPS = ui.readout(ctx.controls, { label: '初期微動継続時間 S−P', value: '' });
+  ui.note(ctx.controls, '●をドラッグ：灰＝震源の深さ、黄＝観測点。地震計の小窓も図の中で動かせる。');
+  ui.note(ctx.controls, 'うすい線＝これから通る道すじ、濃い線＝もう通った所。教科書の値とのずれは「詳しく」。');
 
-  ui.slider(ctx.detail, { label: '波線の本数', min: 12, max: 72, step: 2, value: nRays, digits: 0,
-    onInput: v => { nRays = Math.round(v); rebuildRays(); } });
-  ui.toggle(ctx.detail, { label: '速度分布 v(r) のグラフ', checked: showVprof,
-    onChange: v => { showVprof = v; cvV.box.hidden = !v; ctx.layout(v ? '2' : '1'); cv.resize(); cvV.resize(); } });
-  ui.note(ctx.detail, '波線は1本も途中で打ち切っていない。真下に出た P もふくめ、すべて地表までたどってある。内核を通る P（PKIKP）と内核の表面ではね返る P（PKiKP）は細く薄い線で、影の中へ弱くとどくようすが見える。S の波線だけは外核の入口で終わる（液体は S波を通さない）。外核の表面での反射（PcP など）は扱っていない。');
+  /* --- 「詳しく」 --- */
+  const noteWhy = ui.note(ctx.detail, '');
+  ui.slider(ctx.detail, {
+    label: '表示する波線の本数', min: 12, max: 72, step: 2, value: nRays, digits: 0,
+    onInput: v => { nRays = Math.round(v); rebuildRays(); }
+  });
+  ui.toggle(ctx.detail, {
+    label: '速度分布 v(r) のグラフ', checked: showVprof,
+    onChange: v => { showVprof = v; cvV.box.hidden = !v; ctx.layout(v ? '2' : '1'); cv.resize(); cvV.resize(); }
+  });
+  ui.note(ctx.detail, '波線は1本も途中で打ち切っていない。真下に出た P もふくめ、すべて地表までたどってある（まだ波が来ていない先の部分もうすい線で出してある）。内核を通る P（PKIKP）と内核の表面ではね返る P（PKiKP）は細く薄い線。S の波線だけは外核の入口で終わる（液体は S波を通さない）。外核の表面での反射（PcP など）は扱っていない。');
+  ui.note(ctx.detail, '波面は表示用の波線ではなく、別に用意した細かい射出角（P・S とも 500〜700 本。外核・内核の入口のまわりは指数的に細かく刻む）で計算している。波面が外核の入口で大きく折れ、そこに細い破線が入るのは、外核で速さが 13.7→8.1 km/s に落ちて波線が急に内側へ曲がり、そのあいだに波線が1本も通らない所ができるから。破線はその「波線では埋まらないすきま」＝影のもとを示している。');
+  ui.note(ctx.detail, '時間バーの右端＝いちばん遅い波が地表（S は外核）に着いてから約2秒後（再生速度 ×60 換算で 120 秒ぶん）。そこまで行くと地震発生の瞬間へもどってくり返す。再生速度を変えても右端の「地震発生からの時間」は変わらない（画面の秒数のほうが変わる）。');
   ui.note(ctx.detail, '速度分布は PREM（Dziewonski &amp; Anderson 1981）の値をそのまま折れ線で近似したもの。地殻・海洋だけは省略し、最上部マントルの値で代表させている（厚さ40 kmほどなので角距離への影響は 0.1° 未満）。速度を教科書の 103° に合うように書きかえることはしていない。');
 
   /* --- ドラッグできる点 --- */
-  cv.addHandle({ color: '#dfe9e3', size: 8, label: '震源',
+  cv.addHandle({
+    color: '#dfe9e3', size: 8, label: '震源',
     get: () => ({ x: 0, y: ER - depth }),
     set: (x, y) => { depth = clamp(ER - Math.hypot(x, y), 0, 700); sD.set(depth, true); rebuildRays(); },
-    onEnd: () => rebuildAnalysis() });
-  cv.addHandle({ color: C.yellow, size: 8, label: '観測点',
+    onEnd: () => rebuildAnalysis()
+  });
+  cv.addHandle({
+    color: C.yellow, size: 8, label: '観測点',
     get: () => ({ x: ER * Math.sin(obsTh), y: ER * Math.cos(obsTh) }),
-    set: (x, y) => { obsTh = Math.atan2(x, y); } });
+    set: (x, y) => { obsTh = Math.atan2(x, y); }
+  });
+
+  /* --- 地震計の小窓（キャンバス内・どこをつかんでも動かせる） --- */
+  let boxF = null, boxDrag = null;
+  const boxCompact = () => cv.w < 520;              // スマホ幅では時間の目もりだけの細い帯にする（数値は下の操作パネルにある）
+  function boxRect() {
+    const cp = boxCompact();
+    const W = cp ? Math.min(cv.w - 12, 244) : Math.round(clamp(cv.w * 0.34, 188, 268)), H = cp ? 76 : 166;
+    if (!boxF) boxF = cp ? { x: 0, y: 1 } : { x: 0.99, y: 0.03 };   // 既定位置（あとはドラッグで自由に動かせる）
+    const fx = Math.max(0, cv.w - W - 8), fy = Math.max(0, cv.h - H - 8);
+    return { x: 4 + boxF.x * fx, y: 4 + boxF.y * fy, w: W, h: H, compact: cp };
+  }
+  const inBox = p => { const r = boxRect(); return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h; };
+  cv.onDragStart = (wx, wy, p) => { const r = boxRect(); boxDrag = inBox(p) ? { dx: p.x - r.x, dy: p.y - r.y } : null; };
+  cv.onDrag = (wx, wy, p) => {
+    if (!boxDrag) return;
+    const r = boxRect(), fx = Math.max(1, cv.w - r.w - 8), fy = Math.max(1, cv.h - r.h - 8);
+    boxF.x = clamp((p.x - boxDrag.dx - 4) / fx, 0, 1);
+    boxF.y = clamp((p.y - boxDrag.dy - 4) / fy, 0, 1);
+  };
+  cv.onDragEnd = () => { boxDrag = null; };
+  cv.el.addEventListener('pointermove', ev => {   // 小窓の上では「動かせる」カーソルにする
+    const rc = cv.el.getBoundingClientRect(), p = { x: ev.clientX - rc.left, y: ev.clientY - rc.top };
+    const onHandle = cv._hit ? cv._hit(p) : null;   // 震源・観測点をつかんでいるかは common.js 側の判定にまかせる
+    cv.el.style.cursor = boxDrag ? 'grabbing' : (onHandle ? 'grab' : (inBox(p) ? 'move' : 'pointer'));
+  });
 
   /* --- 地球断面の描画 --- */
   const LAY = [
-    { r: ER,     fill: '#3b2d22', stroke: '#7a5f47', label: 'マントル（固体）', lr: 5000, lt: 236 },
-    { r: R_CMB,  fill: '#5d3410', stroke: '#c2701f', label: '外核（液体）＝S波は通れない', lr: 2600, lt: 242 },
-    { r: R_ICB,  fill: '#c8912f', stroke: '#ffd166', label: '内核（固体）',      lr: 640,  lt: 236 }
+    { r: ER, fill: '#3b2d22', stroke: '#7a5f47', label: 'マントル（固体）', lr: 5000, lt: 236 },
+    { r: R_CMB, fill: '#5d3410', stroke: '#c2701f', label: '外核（液体）＝S波は通れない', lr: 2600, lt: 242 },
+    { r: R_ICB, fill: '#c8912f', stroke: '#ffd166', label: '内核（固体）', lr: 640, lt: 236 }
   ];
+  // 右半分を描いてから、同じ手続きを左右反転してもう一度描く（文字は反転してしまうので外で描く）
+  function mirrored(fn) { const g = cv.ctx, X0 = cv.px(0); g.save(); g.translate(2 * X0, 0); g.scale(-1, 1); fn(); g.restore(); }
+
+  function drawRaySet(list, color, te) {
+    for (const r of list) {
+      cv.plotPts(r.path, { color, width: r.inner ? 1.0 : 1.3, alpha: 0.20 });        // 道すじ全体（うすく）
+      const passed = passedPart(r.path, te);
+      if (passed.length > 1) cv.plotPts(passed, { color, width: r.inner ? 1.2 : 1.8, alpha: 0.88 });  // もう通った所（濃く）
+    }
+  }
+  function drawFrontSet(list, color, te) {
+    for (const run of frontRuns(list, te)) {
+      let solid = [run[0]];
+      const flush = () => { if (solid.length > 1) cv.plotPts(solid, { color, width: 3, alpha: 0.95 }); };
+      for (let i = 1; i < run.length; i++) {
+        if (run[i][2]) {   // 屈折で裂けた所は細い破線でつなぐ（波線が1本も通らないすきま＝影のもと）
+          flush();
+          cv.plotPts([run[i - 1], run[i]], { color, width: 1.2, alpha: 0.5, dash: [5, 6] });
+          solid = [run[i]];
+        } else solid.push(run[i]);
+      }
+      flush();
+    }
+  }
+
   function drawEarth(t) {
     const te = t * SEIS.scale;                  // 地震発生からの時間 [s]
     cv.clear();
-    // 円が切れないよう「縦」に合わせて収める。横に余る分だけ円を左へ寄せ、右側を情報パネルに使う
-    const need = ER * 1.225, aspect = cv.iw / Math.max(1, cv.ih);
-    const halfW = need * Math.max(1, aspect);
-    cv.setViewIso((halfW - need) * 0.5, 0, halfW);
+    const need = ER * 1.215, aspect = cv.iw / Math.max(1, cv.ih);
+    cv.setViewIso(0, 0, need * Math.max(1, aspect));   // 横幅基準の setViewIso を「縦にも切れない」ようにして使う
     for (const L of LAY) cv.circle(0, 0, L.r, { fill: L.fill, color: L.stroke, width: 1.5 });
     // 角距離の目盛り（影ラベルと重なる角度は数値を省く）
     const pMid = BND ? (BND.pStart + BND.pEnd) / 2 : -99, sMid = BND ? (BND.sStart + 178) / 2 : -99;
     for (let d = 0; d <= 180; d += 30) {
-      const nearEdge = showShadow && BND && ((showP && (Math.abs(d - BND.pStart) < 9 || Math.abs(d - BND.pEnd) < 9)) || (showS && Math.abs(d - BND.sStart) < 9));
-      const hide = nearEdge || (showShadow && BND && ((showP && Math.abs(d - pMid) < 12) || (showS && Math.abs(d - sMid) < 12)));
+      const nearEdge = BND && ((showPShadow && (Math.abs(d - BND.pStart) < 9 || Math.abs(d - BND.pEnd) < 9)) || (showSShadow && Math.abs(d - BND.sStart) < 9));
+      const hide = nearEdge || (BND && ((showPShadow && Math.abs(d - pMid) < 12) || (showSShadow && Math.abs(d - sMid) < 12)));
       for (const sg of [1, -1]) {
         if (d === 0 && sg < 0) continue; if (d === 180 && sg < 0) continue;
         const th = sg * d / DEG, sx = Math.sin(th), cy = Math.cos(th);
@@ -475,8 +671,8 @@ function buildSeismic(ctx) {
         if (!hide) cv.text(d + '°', ER * 1.118 * sx, ER * 1.118 * cy, { color: C.muted, size: 11, bg: 'rgba(2,5,3,0.6)' });
       }
     }
-    // シャドーゾーン
-    if (showShadow && BND) {
+    // シャドーゾーン（P と S は別々に出し入れできる）
+    if (BND && (showPShadow || showSShadow)) {
       const band = (d1, d2, sg, r0, r1) => {
         const p = [], n = Math.max(3, Math.round(Math.abs(d2 - d1)));
         for (let i = 0; i <= n; i++) { const th = sg * (d1 + (d2 - d1) * i / n) / DEG; p.push([r1 * Math.sin(th), r1 * Math.cos(th)]); }
@@ -486,122 +682,93 @@ function buildSeismic(ctx) {
       // 帯は地表のすぐ外側に並べて描く（地球の内部を通る波面や波線と重ならない）
       const PB = [ER * 1.004, ER * 1.050], SB = [ER * 1.056, ER * 1.102];
       for (const sg of [1, -1]) {
-        if (showS) cv.plotPts(band(BND.sStart, 180, sg, SB[0], SB[1]), { color: 'none', fill: hexA(C.wave2, 0.38), close: true });
-        if (showP) cv.plotPts(band(BND.pStart, BND.pEnd, sg, PB[0], PB[1]), { color: 'none', fill: hexA(C.wave1, 0.45), close: true });
+        if (showSShadow) cv.plotPts(band(BND.sStart, 180, sg, SB[0], SB[1]), { color: 'none', fill: hexA(C.wave2, 0.38), close: true });
+        if (showPShadow) cv.plotPts(band(BND.pStart, BND.pEnd, sg, PB[0], PB[1]), { color: 'none', fill: hexA(C.wave1, 0.45), close: true });
       }
       // 数字は P と S で半径をずらす（98° と 103° が近くても重ならない）
-      const edge = (d, col, rr, rLab) => { const th = d / DEG;
-        for (const sg of [1, -1]) { const sx2 = sg * Math.sin(th), cy2 = Math.cos(th);
-          cv.line(ER * 0.985 * sx2, ER * 0.985 * cy2, rr * 1.005 * sx2, rr * 1.005 * cy2, { color: col, width: 1.5, alpha: .9 });
-          cv.text(fmt(d, 0) + '°', ER * rLab * sx2, ER * rLab * cy2, { color: col, size: 11, bold: true }); } };
-      if (showP) { edge(BND.pStart, C.wave1, PB[1], 1.118); edge(BND.pEnd, C.wave1, PB[1], 1.118); }
-      if (showS) edge(BND.sStart, C.wave2, SB[1], 1.178);
-      const mid = (BND.pStart + BND.pEnd) / 2 / DEG, rp = (PB[0] + PB[1]) / 2;
-      if (showP) cv.text('P波の影', rp * Math.sin(mid), rp * Math.cos(mid), { color: C.wave1, bold: true, size: 12 });
-      const ms = (BND.sStart + 178) / 2 / DEG, rs = (SB[0] + SB[1]) / 2;
-      if (showS) cv.text('S波の影', rs * Math.sin(ms), rs * Math.cos(ms), { color: C.wave2, bold: true, size: 12 });
-    }
-    // 波線
-    const drawSet = (list, color) => {
-      let stopMark = null;
-      for (const r of list) for (const sg of [1, -1]) {  // stopMark = いちばん外側（角距離が大きい）で止まった点
-        const pts = sg === 1 ? r.path : r.pathM;
-        // 内核を通る P（PKIKP）・内核の表面ではね返る P（PKiKP）は細く薄い線。どれも地表まで描く。
-        cv.plotPts(pts, { color, width: r.inner ? 1.0 : 1.4, alpha: r.inner ? 0.8 : 0.62 });
-        if (r.end === 'cmb') {                       // S が液体の外核に入れず終わる点
-          const q = pts[pts.length - 1];
-          cv.text('×', q[0], q[1], { color, bold: true, size: 13, bg: false });
-          if (sg === 1 && (!stopMark || q[0] > stopMark[0])) stopMark = q;
-        }
-      }
-      return stopMark;
-    };
-    if (showS) {
-      const q = drawSet(RAYS.S, C.wave2);
-      if (q) { const L = Math.hypot(q[0], q[1]) || 1, f = (R_CMB + 620) / L;
-        cv.text('×＝S波はここで止まる', q[0] * f, q[1] * f, { color: C.wave2, size: 11, bold: true, bg: 'rgba(2,5,3,0.92)' }); }
-    }
-    if (showP) drawSet(RAYS.P, C.wave1);
-    // 波面（各波線上で τ = te となる点をつなぐ）
-    if (showFront) {
-      const front = (list, color) => {
-        const pts = [];
-        for (const r of list) {
-          const p = r.path; let hit = null;
-          for (let i = 1; i < p.length; i++) if (p[i - 1][2] <= te && te <= p[i][2]) {
-            const f = (te - p[i - 1][2]) / Math.max(1e-9, p[i][2] - p[i - 1][2]);
-            hit = [p[i - 1][0] + (p[i][0] - p[i - 1][0]) * f, p[i - 1][1] + (p[i][1] - p[i - 1][1]) * f];
-            break;
-          }
-          pts.push(hit);
-        }
+      const edge = (d, col, rr, rLab) => {
+        const th = d / DEG;
         for (const sg of [1, -1]) {
-          let run = [];
-          const flush = () => { if (run.length > 1) cv.plotPts(run, { color, width: 3, alpha: 0.95 }); run = []; };
-          for (let i = 0; i < pts.length; i++) {
-            const h = pts[i];
-            if (!h) { flush(); continue; }
-            const q = [sg * h[0], h[1]];
-            if (run.length && Math.hypot(q[0] - run[run.length - 1][0], q[1] - run[run.length - 1][1]) > 1400) flush();
-            run.push(q);
-          }
-          flush();
+          const sx2 = sg * Math.sin(th), cy2 = Math.cos(th);
+          cv.line(ER * 0.985 * sx2, ER * 0.985 * cy2, rr * 1.005 * sx2, rr * 1.005 * cy2, { color: col, width: 1.5, alpha: .9 });
+          cv.text(fmt(d, 0) + '°', ER * rLab * sx2, ER * rLab * cy2, { color: col, size: 11, bold: true });
         }
       };
-      if (showS) front(RAYS.S, C.wave2);
-      if (showP) front(RAYS.P, C.wave1);
+      if (showPShadow) { edge(BND.pStart, C.wave1, PB[1], 1.118); edge(BND.pEnd, C.wave1, PB[1], 1.118); }
+      if (showSShadow) edge(BND.sStart, C.wave2, SB[1], 1.178);
+      const mid = (BND.pStart + BND.pEnd) / 2 / DEG, rp = (PB[0] + PB[1]) / 2;
+      if (showPShadow) cv.text('P波の影', rp * Math.sin(mid), rp * Math.cos(mid), { color: C.wave1, bold: true, size: 12 });
+      const ms = (BND.sStart + 178) / 2 / DEG, rs = (SB[0] + SB[1]) / 2;
+      if (showSShadow) cv.text('S波の影', rs * Math.sin(ms), rs * Math.cos(ms), { color: C.wave2, bold: true, size: 12 });
+    }
+    // 波線（道すじ）
+    const rays = () => { if (showSRay) drawRaySet(RAYS.S, C.wave2, te); if (showPRay) drawRaySet(RAYS.P, C.wave1, te); };
+    rays(); mirrored(rays);
+    // 波面
+    if (frontReady) {
+      const fronts = () => { if (showSFront) drawFrontSet(FRONT.S, C.wave2, te); if (showPFront) drawFrontSet(FRONT.P, C.wave1, te); };
+      fronts(); mirrored(fronts);
+    }
+    // S が止まる点の × 印（文字は反転させられないので左右ぶんをここで置く）
+    if (showSRay) {
+      let stop = null;
+      for (const r of RAYS.S) if (r.end === 'cmb') {
+        const q = r.path[r.path.length - 1];
+        for (const sg of [1, -1]) cv.text('×', sg * q[0], q[1], { color: C.wave2, bold: true, size: 13, bg: false });
+        if (!stop || q[0] > stop[0]) stop = q;
+      }
+      if (stop) {   // ラベルは左側に置く（右上は地震計の小窓の定位置なので重ねない）
+        const L = Math.hypot(stop[0], stop[1]) || 1, f = (R_CMB + 620) / L;
+        cv.text('×＝S波はここで止まる', -stop[0] * f, stop[1] * f, { color: C.wave2, size: 11, bold: true, bg: 'rgba(2,5,3,0.92)' });
+      }
     }
     // 層ラベル
     for (const L of LAY) { const th = L.lt / DEG; cv.text(L.label, L.lr * Math.sin(th), L.lr * Math.cos(th), { color: '#ffe6c4', bold: true, size: 12 }); }
     cv.drawHandles();
-    // 簡易地震計＋読み取りパネル（広いときは右の余白、狭いときは左下）
-    const dObs = Math.abs(obsTh) * DEG, aP = firstArrival(ARR.P, dObs), aS = firstArrival(ARR.S, dObs);
-    const tp = aP ? aP.t : null, ts = aS ? aS.t : null;
-    const pTag = aP && aP.inner ? '（内核を通った弱い P）' : '';
-    const g = cv.ctx, right = cv.pad.l + cv.iw, rEdge = cv.px(ER * 1.16);
-    const wide = (right - rEdge) > 220;
-    const obsLine = `Δ = ${fmt(dObs, 1)}°　P到達 ${tp == null ? '— ' : fmt(tp, 0) + ' s' + pTag}　S到達 ${ts == null ? '—（Sのシャドーゾーン）' : fmt(ts, 0) + ' s'}`;
-    if (!wide) { readObs.set(obsLine);
-      readPS.set(tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '測定できない');
-      cv.overlay.textContent = '地震発生からの時間 ' + fmt(te, 0) + ' s　再生速度 ×' + SEIS.scale;
-      cv.overlayTL.textContent = '模式図（外核＝深さ2891 km〜／内核＝深さ5150 km〜）';
-      return; }
-    const W = wide ? Math.min(330, right - rEdge - 12) : 218;
-    const H = wide ? 218 : 54;
-    const bx = wide ? right - W - 6 : cv.pad.l + 8;
-    const by = wide ? cv.pad.t + 10 : cv.h - cv.pad.b - H - 6;
-    g.save();
-    g.fillStyle = 'rgba(2,10,6,0.86)'; g.strokeStyle = C.line; g.lineWidth = 1;
-    g.fillRect(bx, by, W, H); g.strokeRect(bx, by, W, H);
-    g.fillStyle = C.text; g.font = 'bold 12px system-ui,sans-serif'; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
-    g.fillText('観測点の地震計', bx + 10, by + 17);
-    const TMAX = 1600, axY = by + (wide ? 62 : H - 12), x0 = bx + 12, x1 = bx + W - 12;
-    const xOf = ss => x0 + (x1 - x0) * clamp(ss / TMAX, 0, 1);
-    g.strokeStyle = C.axis; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, axY); g.lineTo(x1, axY); g.stroke();
-    const mark = (ss, col, lab) => { if (ss == null) return; const X = xOf(ss); g.strokeStyle = col; g.lineWidth = 2.5; g.beginPath(); g.moveTo(X, axY); g.lineTo(X, axY - 22); g.stroke(); g.fillStyle = col; g.font = 'bold 12px system-ui,sans-serif'; g.textAlign = 'center'; g.fillText(lab, X, axY - 26); };
-    mark(tp, C.wave1, 'P'); mark(ts, C.wave2, 'S');
-    if (tp != null && ts != null) { g.fillStyle = hexA(C.yellow, 0.18); g.fillRect(xOf(tp), axY - 16, xOf(ts) - xOf(tp), 16); }
-    const Xc = xOf(te); g.strokeStyle = C.yellow; g.lineWidth = 1.5; g.beginPath(); g.moveTo(Xc, axY + 5); g.lineTo(Xc, axY - 30); g.stroke();
-    g.fillStyle = C.muted; g.font = '10px system-ui,sans-serif'; g.textAlign = 'left'; g.fillText('0', x0, axY + 12); g.textAlign = 'right'; g.fillText(TMAX + ' s', x1, axY + 12);
-    if (wide) {
-      g.textAlign = 'left'; g.font = '12px system-ui,sans-serif';
-      const li = (txt, col, k) => { g.fillStyle = col; g.fillText(txt, bx + 10, by + 92 + k * 18); };
-      li('角距離 Δ = ' + fmt(dObs, 1) + '°', C.yellow, 0);
-      li('P 到達 ' + (tp == null ? '—' : fmt(tp, 0) + ' s' + pTag), C.wave1, 1);
-      li('S 到達 ' + (ts == null ? '— （Sのシャドーゾーン）' : fmt(ts, 0) + ' s'), C.wave2, 2);
-      g.fillStyle = C.text; g.font = 'bold 12px system-ui,sans-serif';
-      g.fillText('初期微動継続時間 S−P = ' + (tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '—'), bx + 10, by + 92 + 3 * 18);
-      if (BND) { g.fillStyle = C.muted; g.font = '11px system-ui,sans-serif';
-        g.fillText('影：P ' + fmt(BND.pStart, 1) + '°〜' + fmt(BND.pEnd, 1) + '°／S ' + fmt(BND.sStart, 1) + '°〜', bx + 10, by + 92 + 4 * 18);
-        g.fillText('帯＝マントルだけの P も PKP も届かない範囲', bx + 10, by + 92 + 5 * 18);
-        g.fillText('（内核を通る弱い P は帯の中にも届く）', bx + 10, by + 92 + 6 * 18); }
-    }
-    g.restore();
-    cv.overlay.textContent = '地震発生からの時間 ' + fmt(te, 0) + ' s　（再生速度 ×' + SEIS.scale + '）';
-    cv.overlayTL.textContent = '模式図（層の厚さは実際の比率）　外核の境界＝深さ2891 km　内核の境界＝深さ5150 km　速度分布は PREM（地殻のみ省略）';
-    readObs.set(obsLine);
-    readPS.set(tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '測定できない');
+    drawBox(te);
+    cv.overlay.textContent = frontJob ? '波面を計算中…' : '再生速度 ×' + SEIS.scale;
+    cv.overlayTL.textContent = '模式図（層の厚さは実際の比率）　外核＝深さ2891 km〜　内核＝深さ5150 km〜';
   }
+
+  /* --- 観測点の簡易地震計（ドラッグで動かせる小窓） --- */
+  function drawBox(te) {
+    const dObs = Math.abs(obsTh) * DEG, arP = firstArrival(ARR.P, dObs), arS = firstArrival(ARR.S, dObs);
+    const tp = arP ? arP.t : null, ts = arS ? arS.t : null;
+    const pTag = arP && arP.inner ? '（内核を通った弱い P）' : '';
+    readObs.set(`Δ = ${fmt(dObs, 1)}°　P到達 ${tp == null ? '— ' : fmt(tp, 0) + ' s' + pTag}　S到達 ${ts == null ? '—（Sのシャドーゾーン）' : fmt(ts, 0) + ' s'}`);
+    readPS.set(tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '測定できない');
+    const g = cv.ctx, r = boxRect(), TMAX = Math.max(1200, SEIS.tEnd);
+    g.save();
+    g.fillStyle = 'rgba(2,10,6,0.88)'; g.strokeStyle = boxDrag ? C.yellow : C.line; g.lineWidth = boxDrag ? 2 : 1;
+    g.fillRect(r.x, r.y, r.w, r.h); g.strokeRect(r.x, r.y, r.w, r.h);
+    g.textBaseline = 'alphabetic';
+    g.fillStyle = C.text; g.font = 'bold 12px system-ui,sans-serif'; g.textAlign = 'left';
+    g.fillText('観測点の地震計', r.x + 10, r.y + 18);
+    g.fillStyle = C.muted; g.font = '10px system-ui,sans-serif'; g.textAlign = 'right';
+    g.fillText('⣿ ドラッグで移動', r.x + r.w - 8, r.y + 18);
+    const axY = r.y + (r.compact ? 52 : 58), x0 = r.x + 10, x1 = r.x + r.w - 10, xOf = ss => x0 + (x1 - x0) * clamp(ss / TMAX, 0, 1);
+    g.strokeStyle = C.axis; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, axY); g.lineTo(x1, axY); g.stroke();
+    if (tp != null && ts != null) { g.fillStyle = hexA(C.yellow, 0.18); g.fillRect(xOf(tp), axY - 16, xOf(ts) - xOf(tp), 16); }
+    const mark = (ss, col, lab) => {
+      if (ss == null) return; const X = xOf(ss);
+      g.strokeStyle = col; g.lineWidth = 2.5; g.beginPath(); g.moveTo(X, axY); g.lineTo(X, axY - 22); g.stroke();
+      g.fillStyle = col; g.font = 'bold 12px system-ui,sans-serif'; g.textAlign = 'center'; g.fillText(lab, X, axY - 26);
+    };
+    mark(tp, C.wave1, 'P'); mark(ts, C.wave2, 'S');
+    const Xc = xOf(te); g.strokeStyle = C.yellow; g.lineWidth = 1.5; g.beginPath(); g.moveTo(Xc, axY + 5); g.lineTo(Xc, axY - 30); g.stroke();
+    g.fillStyle = C.muted; g.font = '10px system-ui,sans-serif'; g.textAlign = 'left'; g.fillText('0', x0, axY + 12);
+    g.textAlign = 'right'; g.fillText(fmt(TMAX, 0) + ' s', x1, axY + 12);
+    if (r.compact) { g.restore(); return; }          // 細い帯のときは数値を下の操作パネルにまかせる
+    g.textAlign = 'left'; g.font = '12px system-ui,sans-serif';
+    const li = (txt, col, k) => { g.fillStyle = col; g.fillText(txt, r.x + 10, r.y + 86 + k * 17); };
+    li('角距離 Δ = ' + fmt(dObs, 1) + '°', C.yellow, 0);
+    li('P 到達 ' + (tp == null ? '—' : fmt(tp, 0) + ' s' + pTag), C.wave1, 1);
+    li('S 到達 ' + (ts == null ? '— （Sのシャドーゾーン）' : fmt(ts, 0) + ' s'), C.wave2, 2);
+    g.fillStyle = C.text; g.font = 'bold 12px system-ui,sans-serif';
+    g.fillText('初期微動継続時間 S−P = ' + (tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '—'), r.x + 10, r.y + 86 + 3 * 17);
+    g.restore();
+  }
+
   function drawVprof() {
     const c = cvV; c.clear(); c.setView({ x0: 0, x1: 14.5, y0: 0, y1: 6500 });
     c.axes({ xLabel: 'v [km/s]', yLabel: 'r [km]', xStep: 2, yStep: 1000 });
@@ -617,12 +784,13 @@ function buildSeismic(ctx) {
     });
   }
 
-  ui.sep(ctx.controls);
-  const readObs = ui.readout(ctx.controls, { label: '観測点', value: '' });
-  const readPS = ui.readout(ctx.controls, { label: '初期微動継続時間 S−P', value: '' });
-
   rebuildAll();
-  return { draw(t) { drawEarth(t); if (!cvV.box.hidden) drawVprof(); } };
+  return {
+    loop: () => SEIS.tEnd / SEIS.scale,              // 波が通りぬけたら地震発生の瞬間へもどる
+    tMax: () => SEIS.tEnd / SEIS.scale,              // 時間バーの右端（地震の時刻でいえば再生速度によらず一定）
+    timeLabel: t => '地震発生からの時間 ' + fmt(t * SEIS.scale, 0) + ' s',
+    draw(t) { stepFront(10); drawEarth(t); if (!cvV.box.hidden) drawVprof(); }
+  };
 }
 
 /* ===================================================================
@@ -775,7 +943,7 @@ Nami.init({
   footer: '⑥ 同じ媒質を横波／縦波で切り替え　⑦ 地球内部の波線追跡（球対称スネルの法則）　⑧ 縦波を横波表示に直す手順',
   tabs: [
     { id: 'lt',      label: '6 縦波と横波',       period: () => S.T, build: buildLT },
-    { id: 'seismic', label: '7 地震のP波・S波',   period: () => 1800 / SEIS.scale, build: buildSeismic },
+    { id: 'seismic', label: '7 地震のP波・S波',   period: () => SEIS.tEnd / SEIS.scale, build: buildSeismic },
     { id: 'ltgraph', label: '8 縦波の横波表示',   period: () => S.T, build: buildLTG }
   ]
 });
