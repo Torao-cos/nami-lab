@@ -35,6 +35,18 @@ main{flex:1 0 auto;display:flex;flex-direction:column}
 .view{display:none;flex:1;min-height:0;flex-direction:column;padding:.6rem;gap:.55rem}
 .view.show{display:flex}
 
+/* 操作子を右列に置くレイアウト（大きな1枚の図が主役のタブ用: ctx.layout('side')） */
+.view.side.show{display:grid;grid-template-columns:minmax(0,1fr) minmax(230px,300px);grid-template-areas:"stage ctl" "bar bar" "detail detail";align-items:stretch}
+.view.side .stage{grid-area:stage;min-height:0}
+.view.side .timebar{grid-area:bar}
+.view.side .controls:not(.detail){grid-area:ctl;flex-direction:column;align-items:stretch;overflow:auto;align-content:flex-start}
+.view.side .controls:not(.detail) .ctl{flex-direction:row;flex-wrap:wrap}
+.view.side .controls:not(.detail) input[type=range]{flex:1;min-width:0;width:auto}
+.view.side .controls:not(.detail) .note{flex-basis:auto}
+.view.side .controls:not(.detail) .sep{width:auto;height:1px;align-self:auto}
+.view.side .controls.detail{grid-area:detail}
+@media (max-width:760px){.view.side.show{display:flex}}
+
 /* 描画面（グリッド） */
 .stage{display:grid;gap:.55rem;grid-template-columns:1fr;flex:1 0 auto;min-height:0}
 .stage.cols2{grid-template-columns:1fr 1fr}

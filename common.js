@@ -359,11 +359,17 @@ window.Nami = (() => {
     toggle() { this.setRunning(!this.running); }
     pause() { if (this.running) this.setRunning(false); }
     play() { if (!this.running) this.setRunning(true); }
-    step(dir) { this.pause(); this.t = Math.max(0, this.t + dir * this.period() / 12); if (this.tab.api && this.tab.api.onStep) this.tab.api.onStep(dir); }
+    step(dir) { if (dir < 0 && this.tab.api && this.tab.api.canStepBack === false) return; this.pause(); this.t = Math.max(0, this.t + dir * this.period() / 12); if (this.tab.api && this.tab.api.onStep) this.tab.api.onStep(dir); }
     reset() { this.t = 0; if (this.tab.api && this.tab.api.onReset) this.tab.api.onReset(); }
     setT(v) { this.t = Math.max(0, v); }
     toggleDetail() { const on = this.tab.ctx.detail.hidden; this.tab.ctx.detail.hidden = !on; this.detailBtn.classList.toggle('active', on); }
-    tick(dtReal) { let dt = 0; if (this.running) { dt = Math.min(dtReal, 0.05) * this.speed; this.t += dt; } this.tMaxView = Math.max(this.tMaxView, this.t); this.range.max = this.tMaxView; if (this.canScrub) this.range.value = this.t; this.tval.innerHTML = '<i>t</i> = ' + fmt(this.t, 2) + ' s'; return dt; }
+    tick(dtReal) { // タブ api の任意フック: loop()=ループ周期[s]（t がそこに達したら 0 へ）／tMax()=時間バー右端固定／timeLabel(t)=表示文字列（例: 地震発生からの時間）
+      let dt = 0; const api = this.tab.api || {};
+      if (this.running) { dt = Math.min(dtReal, 0.05) * this.speed; this.t += dt; }
+      const loop = api.loop ? api.loop() : 0; if (loop > 0 && this.t >= loop) { this.t -= Math.floor(this.t / loop) * loop; if (api.onLoop) api.onLoop(); }
+      const tMax = api.tMax ? api.tMax() : 0; this.tMaxView = tMax > 0 ? tMax : Math.max(this.tMaxView, this.t);
+      this.range.max = this.tMaxView; if (this.canScrub) this.range.value = this.t;
+      this.tval.innerHTML = api.timeLabel ? api.timeLabel(this.t) : '<i>t</i> = ' + fmt(this.t, 2) + ' s'; return dt; }
   }
 
   /* ---------------- アプリ ---------------- */
@@ -398,10 +404,11 @@ window.Nami = (() => {
       const ctx = { stage, controls, detail, statusEls: [], canvases: [] };
       tab.ctx = ctx;
       const sim = new Sim(tab, bar, app); ctx.sim = sim;
-      ctx.layout = k => { stage.classList.remove('cols2', 'cols3'); if (k === '2' || k === '2x2') stage.classList.add('cols2'); if (k === '3') stage.classList.add('cols3'); };
+      ctx.layout = k => { stage.classList.remove('cols2', 'cols3'); if (k === '2' || k === '2x2') stage.classList.add('cols2'); if (k === '3') stage.classList.add('cols3'); if (k === 'side') view.classList.add('side'); };
       ctx.canvas = (opts = {}) => { const cv = new Canvas(stage, Object.assign({ onClick: () => sim.toggle() }, opts)); const st = el('div', 'status'); st.hidden = true; cv.box.appendChild(st); ctx.statusEls.push(st); ctx.canvases.push(cv); return cv; };
       ctx.redraw = () => { };
       tab.api = tab.build(ctx) || {};
+      if (tab.api.canStepBack === false) { sim.stepBack.disabled = true; sim.stepBack.title = 'このタブでは時間を戻せません'; }
       tab.built = true;
     }
     function activate(id, pushHash) {
