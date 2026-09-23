@@ -35,7 +35,7 @@ function loadToken() {
 function git(a, extraEnv) { return spawnSync('git', a, { cwd: ROOT, stdio: 'inherit', env: Object.assign({}, process.env, extraEnv || {}) }); }
 function main() {
   const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
-  if (dirty) { console.error('✗ 未コミットの変更があります。先に commit してください:\n' + dirty); process.exit(1); }
+  if (dirty) { console.warn('！未コミットの変更があります（コミット済みの HEAD だけを push します）:\n' + dirty); }
   const remotes = spawnSync('git', ['remote'], { cwd: ROOT, encoding: 'utf8' }).stdout.split(/\s+/);
   if (remotes.indexOf('origin') < 0) git(['remote', 'add', 'origin', REMOTE]);
   const b64 = Buffer.from('x-access-token:' + loadToken()).toString('base64');
