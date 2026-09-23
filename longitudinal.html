@@ -114,7 +114,8 @@ function buildLT(ctx) {
   ui.sep(ctx.controls);
   ui.toggle(ctx.controls, { label: '媒質の速度矢印', checked: showVel, onChange: v => showVel = v });
   ui.toggle(ctx.controls, { label: '疎・密ラベル', checked: showLabels, onChange: v => showLabels = v });
-  ui.toggle(ctx.controls, { label: 'λ ブラケット', checked: showLam, onChange: v => showLam = v });
+  ui.toggle(ctx.controls, { label: 'λ ブラケット（黄色の●をドラッグで起点の山・密を選べる）', checked: showLam,
+    onChange: v => { showLam = v; hT.hidden = !v; hL.hidden = !v; } });
   ui.note(ctx.controls, '黄色い玉に注目：時間がたっても右へは進まない。進むのは「振動のようす」だけ。');
   ui.note(ctx.controls, '「密」と書いてある所では、左どなりの玉が右へ、右どなりの玉が左へずれている（紫の矢印＝つり合いの位置からのずれ）。両側から玉が寄ってくるから混みあう。「疎」はその逆。ラベルは規則で貼っているのではなく、この2本の矢印の向きがそのまま理由。');
 
@@ -124,6 +125,30 @@ function buildLT(ctx) {
   ui.note(ctx.detail, '振幅 A の上限は λ/2π。これを超えると玉が隣を追い越してしまい、媒質として成り立たない。');
 
   applyMode();
+
+  /* --- λ ブラケットの起点（基準位相）---
+     山（密）は x = λ(t/T − off) − kλ（k は整数＝何番目の山か）。
+     k を状態として持つので、波が進むとブラケットはその山に追随して動く。
+     ドラッグでは x から最寄りの k を選び直す＝別の山（密）へ起点を移せる。 */
+  let lastT = 0, kT = 0, kL = 0;
+  const LAM_YT = () => S.A * 1.75, LAM_YL = () => BY + 0.75;
+  function lamAt(t, off, k) {                 // 画面からはみ出したら隣の山へ送る（端で折り返す）
+    const room = (X1 - X0) - S.lambda;
+    let x = S.lambda * (t / S.T - off) - k * S.lambda;
+    if (room <= 0) return { k, x: X0 };
+    let g = 0;
+    while (x > X1 - S.lambda + 1e-9 && g++ < 999) { k += 1; x -= S.lambda; }
+    while (x < X0 - 1e-9 && g++ < 999) { k -= 1; x += S.lambda; }
+    return { k, x };
+  }
+  const nearestK = (t, off, x) => Math.round((S.lambda * (t / S.T - off) - x) / S.lambda);
+  const hT = cvT.addHandle({ color: C.yellow, size: 6.5, r: 18,
+    get: () => ({ x: lamAt(lastT, 0.25, kT).x, y: LAM_YT() }),
+    set: x => { kT = nearestK(lastT, 0.25, x); } });
+  const hL = cvL.addHandle({ color: C.yellow, size: 6.5, r: 18,
+    get: () => ({ x: lamAt(lastT, 0, kL).x, y: LAM_YL() }),
+    set: x => { kL = nearestK(lastT, 0, x); } });
+  hT.hidden = hL.hidden = !showLam;
 
   /* --- 横波の描画 --- */
   function drawTrans(t) {
@@ -141,13 +166,13 @@ function buildLT(ctx) {
       // 変位ブラケット
       const xc = xs[ci];
       cv.vbracket(xc, 0, y(xc), '変位', { color: C.yellow, size: 12 });
-      // λ ブラケット（山→山）
+      // λ ブラケット（山→山）。起点の山は kT が決める＝●をドラッグで別の山へ移せる
       if (showLam) {
-        const cr = combX(t, 0.25);
-        if (cr.length >= 2) { let b = 0; for (let i = 1; i < cr.length; i++) if (Math.abs((cr[i] + cr[i - 1]) / 2 - (X0 + X1) / 2) < Math.abs((cr[b + 1] + cr[b]) / 2 - (X0 + X1) / 2)) b = i - 1;
-          cv.hbracket(cr[b], cr[b + 1], A * 1.75, 'λ（山→山）', { color: C.yellow }); }
+        const p = lamAt(t, 0.25, kT); kT = p.k;
+        cv.hbracket(p.x, p.x + S.lambda, LAM_YT(), 'λ（山→山）', { color: C.yellow });
       }
     });
+    cv.drawHandles();
     cv.overlayTL.textContent = '媒質のふるえる向き ↕　波の進む向き →';
   }
 
@@ -182,18 +207,31 @@ function buildLT(ctx) {
         for (const x of rareX(t))  { cv.text('疎', x, BY + 0.5, { color: SPARSE, bold: true, size: 15 });
           cv.text('両側へ離れていく', x, BY + 0.34, { color: SPARSE, size: 10 }); }
       }
+      // λ ブラケット（密→密）。起点の密は kL が決める＝●をドラッグで別の密へ移せる
       if (showLam) {
-        const d = denseX(t);
-        if (d.length >= 2) { let b = 0; for (let i = 1; i < d.length; i++) if (Math.abs((d[i] + d[i - 1]) / 2 - (X0 + X1) / 2) < Math.abs((d[b + 1] + d[b]) / 2 - (X0 + X1) / 2)) b = i - 1;
-          cv.hbracket(d[b], d[b + 1], BY + 0.75, 'λ（密→密）', { color: C.yellow }); }
+        const p = lamAt(t, 0, kL); kL = p.k;
+        cv.hbracket(p.x, p.x + S.lambda, LAM_YL(), 'λ（密→密）', { color: C.yellow });
       }
     });
+    cv.drawHandles();
     cv.overlayTL.textContent = '媒質のふるえる向き ↔　波の進む向き →' + (showVel ? '（橙の矢印は玉の速度）' : '');
   }
 
   return {
     onShow() { P.sync(); },
-    draw(t) { if (!cvT.box.hidden) drawTrans(t); if (!cvL.box.hidden) drawLong(t); }
+    draw(t) {
+      lastT = t;
+      if (!cvT.box.hidden) drawTrans(t);
+      if (!cvL.box.hidden) drawLong(t);
+      window.__nami_debug = Object.assign(window.__nami_debug || {}, {
+        lt: { t, lambda: S.lambda, T: S.T, showLam,
+              lamT: lamAt(t, 0.25, kT), lamL: lamAt(t, 0, kL),
+              crests: combX(t, 0.25), dense: denseX(t),
+              // 検証用: ブラケットの線上にあるワールド座標 x の画面（ページ）座標
+              px: (which, x) => { const cv = which === 'T' ? cvT : cvL, r = cv.el.getBoundingClientRect();
+                return { x: r.left + cv.px(x), y: r.top + cv.py(which === 'T' ? LAM_YT() : LAM_YL()) }; } }
+      });
+    }
   };
 }
 

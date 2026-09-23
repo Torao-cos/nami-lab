@@ -62,6 +62,37 @@ function check(name, ok, detail = '') {
   await page.waitForTimeout(300);
   check('再クリックで再開', (await page.locator('.view.show .tval').textContent()) !== t2);
 
+  // λ ブラケット: 起点は山（密）の上にあり、ドラッグで別の山（密）へ移せる
+  await page.click('.view.show .timebar button:nth-child(1)');   // いったん停止（比較しやすくする）
+  await page.waitForTimeout(250);
+  const onCrest = (x, list) => list.some(c => Math.abs(c - x) < 1e-6);
+  for (const [which, key, listKey, label] of [['T', 'lamT', 'crests', '横波（山→山）'], ['L', 'lamL', 'dense', '縦波（密→密）']]) {
+    const d0 = await page.evaluate(k => { const d = window.__nami_debug.lt; return { x: d[k[0]].x, list: d[k[1]], lam: d.lambda }; }, [key, listKey]);
+    check(`λ ブラケットの起点が山（密）の上にある — ${label}`, onCrest(d0.x, d0.list), `起点=${d0.x.toFixed(3)} 候補=[${d0.list.map(v => v.toFixed(2))}]`);
+    // 別の山（密）を目標にしてハンドルをドラッグ
+    const target = d0.list.filter(c => Math.abs(c - d0.x) > 1e-6 && c >= 0 && c <= 8 - d0.lam).sort((a, b) => Math.abs(a - d0.x) - Math.abs(b - d0.x))[0];
+    const from = await page.evaluate(([w, x]) => window.__nami_debug.lt.px(w, x), [which, d0.x]);
+    const to = await page.evaluate(([w, x]) => window.__nami_debug.lt.px(w, x), [which, target + 0.18]);   // 山から少しずらした所へ落とす
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+    const d1 = await page.evaluate(k => { const d = window.__nami_debug.lt; return { x: d[k].x }; }, key);
+    check(`λ ブラケットの起点をドラッグで別の山（密）へ移せる — ${label}`, Math.abs(d1.x - target) < 1e-6,
+      `${d0.x.toFixed(3)} → ${d1.x.toFixed(3)}（目標の山 ${target.toFixed(3)}・つかんだ先は ${(target + 0.18).toFixed(2)}）`);
+  }
+  await page.click('.view.show .timebar button:nth-child(1)');   // 再開
+  await page.waitForTimeout(600);
+  const follow = await page.evaluate(() => {
+    const d = window.__nami_debug.lt;
+    return { t: d.t, xT: d.lamT.x, xL: d.lamL.x, cr: d.crests, de: d.dense };
+  });
+  check('波が進んでも λ ブラケットの起点は山（密）に乗ったまま',
+    onCrest(follow.xT, follow.cr) && onCrest(follow.xL, follow.de),
+    `t=${follow.t.toFixed(2)} 横波=${follow.xT.toFixed(3)} 縦波=${follow.xL.toFixed(3)}`);
+  await page.screenshot({ path: path.join(outDir, 'long-lt-lambda-1280.png'), fullPage: true });
+
   // 表示モード切替（横波のみ／縦波のみ）
   await page.selectOption('.view.show .controls select', 'trans');
   await page.waitForTimeout(300);
