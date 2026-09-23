@@ -36,8 +36,8 @@
   .stage.stage-yxyt .panel,.stage.stage-vel .panel{grid-column:1;grid-row:auto;min-height:205px}
   .stage.stage-yxyt .panel canvas,.stage.stage-vel .panel canvas{min-height:160px}
   .stage.stage-yxyt .panel.max,.stage.stage-vel .panel.max{min-height:70vh}
-  /* 見出しが長いと停止中バッジの下にもぐるので右に場所をあける */
-  .stage.stage-yxyt .panelTitle,.stage.stage-vel .panelTitle{padding-right:11.5rem}
+  /* 縦積みなので段の高さをそろえる必要がない＝見出しは折り返して全文見せる（バッジの分だけ右をあける） */
+  .stage.stage-yxyt .panelTitle,.stage.stage-vel .panelTitle{white-space:normal;padding-right:11.5rem}
   .stage .panel .status{font-size:.8rem;padding:.15rem .35rem}
 }
 </style></head><body>
@@ -174,7 +174,9 @@ function build4(ctx) {
       cvC.line(0, yR, S4.t1, yR, { color: hexA(C.anti, 0.5), width: 1.5, dash: [4, 4] });   // ← 下段と同じ高さの補助線
       cvC.line(S4.t1, -yr, S4.t1, yr, { color: C.anti, width: 2 });
       cvC.text('t₁ = ' + fmt(S4.t1, 2) + ' s', S4.t1, -yr, { color: C.anti, size: 12, baseline: 'bottom', dy: -3 });
-      cvC.text('y = ' + sgn(yR) + fmt(yR, 2) + ' m', S4.t1 * 0.5, yR, { color: C.anti, size: 12, dy: -10 });
+      const alC = S4.t1 > span * 0.78 ? 'right' : 'left';   // 軸ラベルと重ならないよう、カーソルの脇に置く
+      cvC.text('y = ' + sgn(yR) + fmt(yR, 2) + ' m', S4.t1, yR,
+        { color: C.anti, size: 12, align: alC, dx: alC === 'left' ? 10 : -10, dy: -12 });
       cvC.drawHandles();
 
       /* ---------- 右下: 時刻 t₁ の y-x（波の写真・静止） ---------- */
@@ -185,7 +187,9 @@ function build4(ctx) {
       cvD.line(0, yR, S4.x1, yR, { color: hexA(C.anti, 0.5), width: 1.5, dash: [4, 4] });   // ← 上段と同じ高さの補助線
       cvD.line(S4.x1, -yr, S4.x1, yr, { color: C.anti, width: 2, dash: [6, 5], alpha: 0.85 });
       cvD.text('x₁ = ' + fmt(S4.x1, 2) + ' m', S4.x1, -yr, { color: C.anti, size: 12, baseline: 'bottom', dy: -3 });
-      cvD.text('y = ' + sgn(yR) + fmt(yR, 2) + ' m', S4.x1 * 0.5, yR, { color: C.anti, size: 12, dy: -10 });
+      const alD = S4.x1 > XMAX * 0.78 ? 'right' : 'left';
+      cvD.text('y = ' + sgn(yR) + fmt(yR, 2) + ' m', S4.x1, yR,
+        { color: C.anti, size: 12, align: alD, dx: alD === 'left' ? 10 : -10, dy: -12 });
       const dx1 = S4.dir > 0 ? 8.4 : 9.4;
       cvD.arrow(dx1, yr * 0.85, dx1 + S4.dir, yr * 0.85, { color: C.muted, width: 2, head: 10 });
       cvD.drawHandles();
@@ -266,6 +270,7 @@ function build5(ctx) {
   DBG.sim5 = ctx.sim;
   DBG.setXP = x => { S5.xP = clamp(x, 0, XMAX); };
   DBG.setDir5 = d => { S5.dir = d < 0 ? -1 : 1; };
+  DBG.setDt5 = f => { S5.dtFrac = clamp(f, 0, 0.5); dtSl.set(S5.dtFrac, true); };
 
   return {
     draw(t) {
@@ -346,6 +351,9 @@ function build5(ctx) {
         slopeNumeric: (y5(S5.xP, t + h) - y5(S5.xP, t - h)) / (2 * h),
         vtAtNow: vy5(S5.xP, t),
         vmax,
+        // 速度矢印: 長さ＝v·Δt、矢の先＝y + v·Δt（Δt→0 で Δt 後のゴースト波形に一致）
+        arrowLen: Math.abs(vP * kArr), arrowExpect: Math.abs(vP) * dt,
+        arrowTip: yP + vP * kArr, ghostY: y5(S5.xP, t + dt),
         winP: win, winW: recorderWindow(t, span),
         padP: Object.assign({}, cvP.pad), padW: Object.assign({}, cvW.pad),
         pxP: cvP.px(t), pxW: cvW.px(t)
