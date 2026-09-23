@@ -211,7 +211,7 @@ function build5(ctx) {
     draw(t) {
       curT = t;
       const A = S5.A, T = S5.T, L = S5.lambda, dt = S5.dtFrac * T;
-      const vmax = TAU * A / T, kArr = 0.75 * A / vmax;   // 速度→world長さ（最大 0.75A）
+      const vmax = TAU * A / T, kArr = dt > 0 ? dt : 0.75 * A / vmax;   // 矢印の長さ＝Δt の間の移動量 v·Δt（ゴースト波形の上に矢印の先が乗る）
       const yr = A * 1.7, vr = vmax * 1.35;
       const yP = y5(S5.xP, t), vP = vy5(S5.xP, t);
       const sgn = x => (x >= 0 ? '+' : '');

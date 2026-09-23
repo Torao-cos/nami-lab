@@ -217,7 +217,8 @@ window.Nami = (() => {
     }
     text(str, x, y, o = {}) { this.textPx(str, this.px(x), this.py(y), o); }
     textPx(str, X, Y, o = {}) { // 変数は斜体・単位は立体（o.rich===false で無効）
-      const g = this.ctx; g.save(); const size = o.size || 13, fontOf = it => `${it ? 'italic ' : ''}${o.bold ? 'bold ' : ''}${size}px system-ui,sans-serif`;
+      const g = this.ctx; g.save(); const size = o.size || 13;
+      const fontOf = it => (it ? `italic ${o.bold ? 'bold ' : ''}${Math.round(size * 1.1)}px "Times New Roman","Cambria Math","STIX Two Math",Times,serif` : `${o.bold ? 'bold ' : ''}${size}px system-ui,sans-serif`);
       const runs = o.rich === false ? [{ t: String(str), i: false }] : mathRuns(str);
       runs.forEach(r => { g.font = fontOf(r.i); r.w = g.measureText(r.t).width; });
       const W = runs.reduce((s, r) => s + r.w, 0);

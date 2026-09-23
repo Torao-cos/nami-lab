@@ -6,6 +6,8 @@
 }
 *{box-sizing:border-box}
 [hidden]{display:none !important}
+/* 物理の変数＝斜体（数式エディタ風のセリフ体）。単位・関数名は立体のまま */
+i{font-family:"Times New Roman","Cambria Math","STIX Two Math","Latin Modern Math",Times,serif;font-style:italic;font-size:1.08em}
 html{height:100%}
 body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif}
 body{display:flex;flex-direction:column;overflow-x:hidden}
