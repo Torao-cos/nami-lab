@@ -56,7 +56,7 @@ const DBG = (window.__nami_debug = window.__nami_debug || {});
 /* ============================================================
    4  y-x ⇄ y-t
    ============================================================ */
-const S4 = { lambda: 2.0, T: 2.0, A: 1.0, dir: 1, overlay: false, n: 1,
+const S4 = { lambda: 2.0, T: 2.0, A: 1.0, dir: 1, n: 1,
              cuts: [{ x: 2.5 }, { x: 5.0 }, { x: 7.5 }] };
 const CUT_C = [C.yellow, C.anti, C.dens];          // 黄 / 水色 / 紫
 const CUT_L = ['P₁', 'P₂', 'P₃'];
@@ -68,7 +68,7 @@ function build4(ctx) {
   ctx.layout('1');
   ctx.stage.classList.add('stage-yxyt');
   const cvX = ctx.canvas({ title: 'y-x グラフ ― ある瞬間の波の形（カット線 x = x₀ をドラッグ）' });
-  const cvT = ctx.canvas({ title: 'y-t グラフ ― 各 x₀ にある媒質の振動（記録計・右端が現在）' });
+  const cvT = ctx.canvas({ title: 'y-t グラフ ― 各 x₀ にある媒質の振動（ペンが右へ進んで記録。右端まで来たら次のページへ）' });
   let curT = 0;
 
   /* --- ドラッグできるカット線（つかむ点は波の上の媒質点・x 方向のみ動く） --- */
@@ -94,21 +94,19 @@ function build4(ctx) {
   addBtn = ui.button(cutBtns, { label: '＋ 追加', onClick: () => { if (S4.n < 3) S4.n++; sync(); } });
   delBtn = ui.button(cutBtns, { label: '− 削除', onClick: () => { if (S4.n > 1) S4.n--; sync(); } });
   ui.legend(ctx.controls, [[CUT_C[0], 'P₁'], [CUT_C[1], 'P₂'], [CUT_C[2], 'P₃']]);
-  ui.toggle(ctx.controls, { label: '左右反転して重ねる', checked: S4.overlay, onChange: b => S4.overlay = b });
   ui.sep(ctx.controls);
   const rv = ui.readout(ctx.controls, { label: '波の速さ' });
   const rx = ui.readout(ctx.controls, { label: 'カット位置' });
   ui.note(ctx.controls,
-    '「左右反転して重ねる」を ON にすると、y-x グラフの色をつけた部分（P をすでに通りすぎた波形）を左右反転したものが y-t に重なる。' +
-    '右へ進む波では両者がぴったり一致する ＝ y-t は y-x の鏡像。');
+    '上の y-x グラフは「ある瞬間に、場所ごとの変位」を写した写真。下の y-t グラフは「ある場所（カット線 x₀）の媒質が、時間とともにどう動いたか」の記録。' +
+    'カット線を動かして、その場所に次に何がやってくるか（波形のどの部分が x₀ に向かって進んでいるか）を見ながら、y-t の形がどう決まるかを考える。コマ送り（◀▶）が使える。');
   ui.toggle(ctx.detail, { label: '進行方向を反転する（左へ進む波）', checked: false, onChange: b => S4.dir = b ? -1 : 1 });
-  ui.note(ctx.detail, '左へ進む波では、重ねる相手が x₀ の反対側の波形になる。式は y = A sin2π(t/T + x/λ)。');
+  ui.note(ctx.detail, '左へ進む波の式は y = A sin2π(t/T + x/λ)。');
   sync();
 
   DBG.sim4 = ctx.sim;
   DBG.setCut = (i, x) => { S4.cuts[i].x = clamp(x, 0, XMAX); };
   DBG.setCutCount = n => { S4.n = clamp(n, 1, 3); sync(); };
-  DBG.setOverlay4 = b => { S4.overlay = !!b; };
 
   return {
     draw(t) {
@@ -121,14 +119,6 @@ function build4(ctx) {
       cvX.clear();
       cvX.setView({ x0: 0, x1: XMAX, y0: -yr, y1: yr });
       cvX.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1 });
-      // y-t に写している区間を太く色づけ
-      if (S4.overlay) cuts.forEach((c, i) => {
-        const xa = c.x, xb = c.x + S4.dir * v * (t - tLeft);
-        cvX.clip(() => cvX.plot(x => y4(x, t), {
-          color: CUT_C[i], width: 9, alpha: 0.3,
-          x0: clamp(Math.min(xa, xb), 0, XMAX), x1: clamp(Math.max(xa, xb), 0, XMAX)
-        }));
-      });
       cvX.clip(() => cvX.plot(x => y4(x, t), { color: C.wave, width: 3 }));
       // カット線
       cuts.forEach((c, i) => {
@@ -151,30 +141,15 @@ function build4(ctx) {
         cvT.clip(() => cvT.plot(tau => yt4(i, tau), { color: CUT_C[i], width: 3, x0: tLeft, x1: t }));
         cvT.dot(t, yt4(i, t), 5, { color: CUT_C[i], stroke: '#000' });
       }
-      // 左右反転して重ねた曲線: y-x の x = x₀ − dir·v(τ−t) を τ に対して描く
-      if (S4.overlay) cvT.clip(() => cuts.forEach((c, i) => {
-        cvT.plot(tau => {
-          const x = c.x - S4.dir * v * (tau - t);
-          return (x < 0 || x > XMAX) ? null : y4(x, t);
-        }, { color: CUT_C[i], width: 6, alpha: 0.5, dash: [9, 6], x0: tLeft, x1: t });
-      }));
       if (cvT.w > 520) cuts.forEach((c, i) => cvT.text(CUT_L[i], t, yt4(i, t),   // 狭い画面では凡例に任せる
         { color: CUT_C[i], bold: true, dx: -20, dy: [-16, 18, -36][i], size: 13 }));
-      cvT.textPx('今', cvT.px(t) - 12, cvT.pad.t + 10, { color: C.muted, size: 12 });
 
       /* ---------- 読み出し ---------- */
       rv.set(`v = λ/T = ${fmt(S4.lambda, 2)} / ${fmt(S4.T, 2)} = ${fmt(v, 2)} m/s` + (S4.dir < 0 ? '（左向き）' : '（右向き）'));
       rx.set(cuts.map((c, i) => `${CUT_L[i]} x₀=${fmt(c.x, 2)} m`).join('　'));
 
       /* ---------- 検証用 ---------- */
-      let err = 0;
-      for (let k = 0; k <= 120; k++) {
-        const tau = tLeft + (t - tLeft) * k / 120;
-        const x = cuts[0].x - S4.dir * v * (tau - t);
-        if (x < 0 || x > XMAX) continue;
-        err = Math.max(err, Math.abs(yt4(0, tau) - y4(x, t)));
-      }
-      DBG.b4 = { t, dir: S4.dir, v, span, n: S4.n, cuts: cuts.map(c => c.x), overlay: S4.overlay, overlayMaxErr: err };
+      DBG.b4 = { t, dir: S4.dir, v, span, n: S4.n, cuts: cuts.map(c => c.x) };
     }
   };
 }

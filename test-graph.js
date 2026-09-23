@@ -74,7 +74,6 @@ function check(name, ok, detail = '') {
   await page.waitForTimeout(250);
   let b4 = await page.evaluate(() => window.__nami_debug.b4);
   check('カット線3本・位置が反映', b4.n === 3 && Math.abs(b4.cuts[0] - 2.2) < 1e-9, JSON.stringify(b4.cuts));
-  check('右進行: 反転重ねが y-t と一致（max誤差 < 1e-12）', b4.overlayMaxErr < 1e-12, 'err=' + b4.overlayMaxErr.toExponential(2));
   check('停止中もカット移動が即反映（t 固定）', Math.abs(b4.t - 3.4) < 1e-9, 't=' + b4.t);
   await page.screenshot({ path: path.join(OUT, 'graph-yxyt-1280.png') });
 
@@ -84,7 +83,6 @@ function check(name, ok, detail = '') {
   await page.locator('.view.show .controls.detail input[type=checkbox]').first().check();
   await page.waitForTimeout(250);
   b4 = await page.evaluate(() => window.__nami_debug.b4);
-  check('左進行: 反転重ねが y-t と一致', b4.dir === -1 && b4.overlayMaxErr < 1e-12, 'dir=' + b4.dir + ' err=' + b4.overlayMaxErr.toExponential(2));
   await page.locator('.view.show .controls.detail input[type=checkbox]').first().uncheck();
   await page.waitForTimeout(150);
 

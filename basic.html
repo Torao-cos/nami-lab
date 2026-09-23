@@ -166,7 +166,7 @@ Nami.init({
             cvC.text('y = ' + fmt(y) + ' m', xp, YR - 0.15, { color: C.wave, bold: true, size: 14, align: 'right', dx: -8 });
             /* y-t 記録 */
             cvR.clear(); cvR.setPad({ l: 46, r: 14, t: 16, b: 32 });
-            const span = Math.max(3 * S.T, 4); const x0 = Math.max(0, t - span), x1 = x0 + span;
+            const span = Math.max(3 * S.T, 4); const { x0, x1 } = Nami.recorderWindow(t, span);
             cvR.setView({ x0, x1, y0: -YR, y1: YR });
             cvR.axes({ xLabel: 't [s]', yLabel: 'y [m]', yStep: 0.5 });
             cvR.clip(() => { cvR.plot(tt => S.A * Math.sin(TAU * tt / S.T), { color: C.wave, width: 2.5, x0: 0, x1: t }); cvR.plot(tt => S.A * Math.sin(TAU * tt / S.T), { color: C.wave, width: 1, alpha: .25, dash: [4, 4], x0: t, x1 }); });
@@ -242,7 +242,7 @@ Nami.init({
             cv.drawHandles();
             /* y-t */
             cvR.clear();
-            const span = 3 * S.T; const x0 = Math.max(0, t - span);
+            const span = 3 * S.T; const { x0 } = Nami.recorderWindow(t, span);
             cvR.setView({ x0, x1: x0 + span, y0: -1.6, y1: 1.6 }); cvR.axes({ xLabel: 't [s]', yLabel: 'y [m]', yStep: 0.5 });
             cvR.clip(() => { cvR.plot(tt => yOf(st.xP, tt), { color: C.yellow, width: 2.5, x0: 0, x1: t }); });
             cvR.dot(t, yP, 6, { color: C.yellow, stroke: '#000' });

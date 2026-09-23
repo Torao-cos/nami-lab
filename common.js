@@ -391,14 +391,15 @@ window.Nami = (() => {
     return app;
   }
 
-  /* 記録計（y-t）描画ヘルパ: 右端が現在時刻、紙が左へ流れる */
+  /* 記録計（y-t）描画ヘルパ: t 軸は右向きに固定。ペンが左から右へ進み、右端に達したら次のページ（[k·span, (k+1)·span]）へ */
+  function recorderWindow(t, span) { const x0 = Math.floor(t / span) * span; return { x0, x1: x0 + span }; }
   function recorder(cv, o) {
-    const t = o.t, span = o.span; const x0 = t - span;
-    cv.setView({ x0, x1: t, y0: o.y0 == null ? -o.A * 1.3 : o.y0, y1: o.y1 == null ? o.A * 1.3 : o.y1 });
+    const t = o.t, span = o.span; const { x0, x1 } = recorderWindow(t, span);
+    cv.setView({ x0, x1, y0: o.y0 == null ? -o.A * 1.3 : o.y0, y1: o.y1 == null ? o.A * 1.3 : o.y1 });
     cv.axes({ xLabel: o.xLabel || 't [s]', yLabel: o.yLabel || 'y [m]', xStep: o.xStep, yStep: o.yStep, xAxis: true });
     cv.clip(() => { cv.plot(tt => (tt < 0 ? null : o.y(tt)), { color: o.color || C.wave, width: o.width || 2.5, x0: Math.max(0, x0), x1: t, dash: o.dash }); });
     if (o.pen !== false && t >= 0) cv.dot(t, o.y(t), 5, { color: o.color || C.wave, stroke: '#000' });
   }
 
-  return { C, TAU, clamp, frac, fmt, el, niceStep, hexA, Canvas, ui, Wave, Sim, init, recorder, app };
+  return { C, TAU, clamp, frac, fmt, el, niceStep, hexA, Canvas, ui, Wave, Sim, init, recorder, recorderWindow, app };
 })();

@@ -7,6 +7,7 @@
   .controls .formula em{font-style:normal;color:var(--muted);font-size:.85em}
   .controls .formula .bad{color:var(--red);font-weight:700}
   .controls .note b{color:var(--green);font-weight:700}
+  @media (max-width:760px){ .panel{min-height:300px} }
 </style>
 </head><body>
 <script src="common.js"></script>
@@ -62,6 +63,8 @@ function arcPx(cv, x, y, rpx, a0, a1, o = {}) {
   g.strokeStyle = o.color || C.guide; g.lineWidth = o.width || 1.5; g.setLineDash(o.dash || []);
   g.beginPath(); g.arc(cv.px(x), cv.py(y), rpx, -a0, -a1, a1 > a0); g.stroke(); g.restore();
 }
+// HTML を使える注記（ui.note は textContent のため）
+function note(parent, html) { const n = ui.note(parent, ''); n.innerHTML = html; return n; }
 function fillRectPx(cv, X, Y, W, H, color) { const g = cv.ctx; g.save(); g.fillStyle = color; g.fillRect(X, Y, W, H); g.restore(); }
 
 /* =========================================================
@@ -90,9 +93,9 @@ function buildHuygens(ctx) {
   ui.slider(ctx.controls, { label: 'λ', min: 0.6, max: 3, step: 0.1, value: 2, unit: 'm', digits: 1, onInput: v => st.lam = v });
   ui.slider(ctx.controls, { label: 'T', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
   const F = ui.formula(ctx.controls, '');
-  ui.note(ctx.controls, '波面上の各点からは同じ速さの素元波（球面波）が出る。それらに共通に接する面＝<b>包絡面</b>が、Δt 後の波面になる。半径 r を大きくすると次の波面が見えてくる。');
+  note(ctx.controls, '波面上の各点からは同じ速さの素元波（球面波）が出る。それらに共通に接する面＝<b>包絡面</b>が、Δt 後の波面になる。半径 r を大きくすると次の波面が見えてくる。');
   ui.toggle(ctx.detail, { label: '通り過ぎた波面を残す', checked: true, onChange: v => st.trail = v });
-  ui.note(ctx.detail, '素元波の「後ろ向きの部分」は実際には現れない（前方にだけ進む）。「半円で描く」で教科書と同じ図になる。');
+  note(ctx.detail, '素元波の「後ろ向きの部分」は実際には現れない（前方にだけ進む）。「半円で描く」で教科書と同じ図になる。');
 
   return {
     draw(t) {
@@ -100,10 +103,10 @@ function buildHuygens(ctx) {
       const lam = st.lam, T = st.T, v = lam / T;
       cv.clear(); cv.setPad({ l: 12, r: 12, t: 12, b: 26 });
       const aspect = cv.iw / Math.max(1, cv.ih);
-      const halfW = Math.max(4.5, 1.75 * aspect);
+      const halfW = Math.max(3.2, 1.2 * aspect);
       cv.setViewIso(halfW - 0.9, 0, halfW);
       const V = cv.view;
-      cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', grid: true, yAxis: false, xAxis: false });
+      cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', grid: true, yAxis: false, xAxis: false, xStep: 1, yStep: 1 });
 
       const cyc0 = Math.floor(t / T), fr = t / T - cyc0;
       const rAuto = lam * fr;
@@ -113,11 +116,11 @@ function buildHuygens(ctx) {
       const gray = hexA(C.guide, 0.5);
 
       if (st.mode === 'plane') {
-        const xs = V.x0 + 0.5;
+        const xs = V.x0 + 0.8;
         const K = Math.max(1, Math.floor((V.x1 - 0.7 - xs) / lam));
         const cyc = st.auto ? (cyc0 % K) : 0;
         const x0 = xs + lam * cyc;
-        const ySpan = V.y1 * 0.82;
+        const ySpan = V.y1 * 0.88;
         // 残像（すでに通った波面）
         if (st.trail) for (let c = 0; c < cyc; c++) cv.line(xs + lam * c, -ySpan, xs + lam * c, ySpan, { color: C.wave, width: 2, alpha: 0.22 });
         // 素元波
@@ -135,15 +138,20 @@ function buildHuygens(ctx) {
           cv.line(x0 + r, -ySpan * 1.06, x0 + r, ySpan * 1.06, { color: C.wave, width: 3, dash: solid ? [] : [9, 7] });
           cv.text('新しい波面', x0 + r, ySpan * 1.06, { dy: -10, color: C.wave, bold: true });
         }
-        cv.text('元の波面', x0, -ySpan * 1.06, { dy: 12, color: C.wave, bold: true });
+        const labLeft = cv.px(x0) - cv.pad.l < 90;   // 画面左端に近いときは右側に出す
+        cv.text('元の波面', x0, -ySpan * 0.45, { dx: labLeft ? 8 : -8, align: labLeft ? 'left' : 'right', color: C.wave, bold: true });
       } else {
         const S = { x: V.x0 + 0.55, y: 0 };
         const R0base = Math.max(0.9, lam * 0.7);
         const K = Math.max(1, Math.floor((V.x1 - 0.7 - S.x - R0base) / lam));
         const cyc = st.auto ? (cyc0 % K) : 0;
         const R0 = R0base + lam * cyc;
-        const thMax = 72 * D2R;
-        if (st.trail) for (let c = 0; c < cyc; c++) cv.circle(S.x, S.y, R0base + lam * c, { color: C.wave, width: 2, alpha: .22, a0: -thMax, a1: thMax });
+        // 円弧が画面の上下に収まる範囲にする
+        const thMax = clamp(Math.asin(Math.min(1, V.y1 * 0.92 / R0)), 16 * D2R, 72 * D2R);
+        if (st.trail) for (let c = 0; c < cyc; c++) {
+          const Rc = R0base + lam * c, th = clamp(Math.asin(Math.min(1, V.y1 * 0.92 / Rc)), 16 * D2R, 72 * D2R);
+          cv.circle(S.x, S.y, Rc, { color: C.wave, width: 2, alpha: .22, a0: -th, a1: th });
+        }
         if (r > 0.004) for (let k = 0; k < N; k++) {
           const th = N === 1 ? 0 : -thMax + 2 * thMax * k / (N - 1);
           const px = S.x + R0 * Math.cos(th), py = S.y + R0 * Math.sin(th);
@@ -188,10 +196,10 @@ function buildRefract(ctx) {
   ui.toggle(ctx.controls, { label: '射線・法線・角', checked: true, onChange: v => st.ray = v });
   ui.toggle(ctx.controls, { label: '波面アニメーション', checked: true, onChange: v => st.anim = v });
   const F = ui.formula(ctx.controls, '');
-  ui.note(ctx.controls, '入射波面の端が A に着いてから、もう一方の端が B に着くまでの間に、A から出た素元波は媒質2を r = v₂t だけ広がる。<b>入射波面のハンドル（黄）をドラッグ</b>しても入射角を変えられる。');
+  note(ctx.controls, '入射波面の端が A に着いてから、もう一方の端が B に着くまでの間に、A から出た素元波は媒質2を r = v₂t だけ広がる。<b>入射波面のハンドル（黄）をドラッグ</b>しても入射角を変えられる。');
   ui.slider(ctx.detail, { label: '素元波の数', min: 4, max: 8, step: 1, value: 6, digits: 0, onInput: v => st.n = v });
   ui.slider(ctx.detail, { label: 'T（周期）', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
-  ui.note(ctx.detail, '波面アニメーションは λ₁ = v₁T、λ₂ = v₂T の間隔で山の線を描いている。境界で山の線がつながる（位相が連続）ことに注目。');
+  note(ctx.detail, '波面アニメーションは λ₁ = v₁T、λ₂ = v₂T の間隔で山の線を描いている。境界で山の線がつながる（位相が連続）ことに注目。');
 
   // ジオメトリ（draw で更新）
   const G = { D: 3, A: { x: -1.5, y: 0 }, hlen: 1.5 };
@@ -245,7 +253,7 @@ function buildRefract(ctx) {
       // 境界
       cv.line(V.x0, 0, V.x1, 0, { color: '#8fd6b0', width: 2.5 });
       cv.text('媒質1　v₁ = ' + fmt(v1, 2) + ' m/s　λ₁ = ' + fmt(lam1, 2) + ' m', V.x0 + 0.15, V.y1, { dy: 14, align: 'left', color: C.wave1, bold: true });
-      cv.text('媒質2　v₂ = ' + fmt(v2, 2) + ' m/s' + (total ? '' : '　λ₂ = ' + fmt(lam2, 2) + ' m'), V.x0 + 0.15, V.y0, { dy: -14, align: 'left', color: C.dens, bold: true });
+      cv.text('媒質2　v₂ = ' + fmt(v2, 2) + ' m/s' + (total ? '' : '　λ₂ = ' + fmt(lam2, 2) + ' m'), V.x0 + 0.15, V.y0 * 0.62, { align: 'left', color: C.dens, bold: true });
 
       const degen = si < 0.03;
       if (!degen) {
@@ -276,13 +284,13 @@ function buildRefract(ctx) {
         // 射線・法線・角
         if (st.ray) {
           cv.line(A.x, V.y1 * 0.95, A.x, V.y0 * 0.95, { color: C.muted, width: 1.4, dash: [6, 6], alpha: .8 });
-          const Lin = Math.min(V.y1 * 0.85, 1.6);
-          cv.arrow(A.x - d1.x * Lin / ci, A.y - d1.y * Lin / ci, A.x, A.y, { color: C.wave1, width: 2.5 });
+          const Lin = Math.min(V.y1 * 0.85 / Math.max(ci, 0.2), 2.4);
+          cv.arrow(A.x - d1.x * Lin, A.y - d1.y * Lin, A.x, A.y, { color: C.wave1, width: 2.5 });
           arcPx(cv, A.x, A.y, 44, Math.PI / 2, Math.PI / 2 + i, { color: C.wave1 });
           cv.textPx('i = ' + fmt(st.i, 0) + '°', cv.px(A.x) + 58 * Math.cos(-(Math.PI / 2 + i / 2)), cv.py(A.y) + 58 * Math.sin(-(Math.PI / 2 + i / 2)), { color: C.wave1, bold: true });
           if (!total) {
-            const Lr = Math.min(-V.y0 * 0.85, 1.6);
-            cv.arrow(A.x, A.y, A.x + d2.x * Lr / Math.cos(rr), A.y + d2.y * Lr / Math.cos(rr), { color: C.wave, width: 2.5 });
+            const Lr = Math.min(-V.y0 * 0.85 / Math.max(Math.cos(rr), 0.2), 2.4);
+            cv.arrow(A.x, A.y, A.x + d2.x * Lr, A.y + d2.y * Lr, { color: C.wave, width: 2.5 });
             arcPx(cv, A.x, A.y, 44, -Math.PI / 2, -Math.PI / 2 + rr, { color: C.wave });
             cv.textPx('r = ' + fmt(rr * R2D, 1) + '°', cv.px(A.x) + 58 * Math.cos(Math.PI / 2 - rr / 2), cv.py(A.y) + 58 * Math.sin(Math.PI / 2 - rr / 2), { color: C.wave, bold: true });
           }
@@ -327,11 +335,11 @@ function buildDiffract(ctx) {
   const sSep = ui.slider(ctx.controls, { label: 'スリット間隔 d', min: 12, max: 70, step: 1, value: 40, digits: 0, unit: 'セル', onInput: v => { st.sep = v; buildWall(); } });
   ui.slider(ctx.controls, { label: '明るさ', min: 1, max: 6, step: 0.1, value: 2.2, digits: 1, onInput: v => st.gain = v });
   const RO = ui.readout(ctx.controls, { label: 'w / λ', value: '' });
-  ui.note(ctx.controls, '<b>作図＝手順（「12 素元波」タブ）／タンク＝現象（このタブ）</b>。スリットが波長に比べて狭い（w ≲ λ）ほど、波はスリットの後ろへ大きく回り込む。時間を巻き戻すことはできない（停止・再開・スロー・リセットのみ）。');
-  ui.note(ctx.detail, '2次元波動方程式 ∂²u/∂t² = c²∇²u を差分法（クーラン数 0.5）で解いている。画面の端は吸収層（反射させない）。障壁は変位 0 の固い壁。');
+  note(ctx.controls, '<b>作図＝手順（「12 素元波」タブ）／タンク＝現象（このタブ）</b>。スリットが波長に比べて狭い（w ≲ λ）ほど、波はスリットの後ろへ大きく回り込む。時間を巻き戻すことはできない（停止・再開・スロー・リセットのみ）。');
+  note(ctx.detail, '2次元波動方程式 ∂²u/∂t² = c²∇²u を差分法（クーラン数 0.5）で解いている。画面の端は吸収層（反射させない）。障壁は変位 0 の固い壁。');
 
   // --- 格子 ---
-  let nx = 0, ny = 0, u, up, un, wall, sig, off, offg, img, step = 0, acc = 0;
+  let nx = 0, ny = 0, u, up, un, wall, sig, off, offg, img, step = 0, acc = 0, phase = 0;
   function alloc(_nx, _ny) {
     nx = _nx; ny = _ny; const n = nx * ny;
     u = new Float32Array(n); up = new Float32Array(n); un = new Float32Array(n);
@@ -344,14 +352,14 @@ function buildDiffract(ctx) {
       const dist = Math.min(i2, j, nx - 1 - i2, ny - 1 - j);
       sig[j * nx + i2] = dist >= L ? 0 : 0.14 * Math.pow((L - dist) / L, 2);
     }
-    step = 0; acc = 0; buildWall();
+    step = 0; acc = 0; phase = 0; buildWall();
     DBG.grid = nx + '×' + ny;
   }
   const BXR = 0.42; // 障壁の位置（幅に対する割合）
   function buildWall() {
     if (!wall) return;
     wall.fill(0);
-    if (st.preset === 'none') { clearField(); return; }
+    if (st.preset === 'none') return;
     const bx = Math.round(nx * BXR), cy = ny / 2;
     const open = [];
     if (st.preset === 'single') open.push([cy - st.w / 2, cy + st.w / 2]);
@@ -361,9 +369,9 @@ function buildDiffract(ctx) {
       for (const [a, b] of open) if (j >= a && j < b) isOpen = true;
       if (!isOpen) for (let i2 = bx; i2 < bx + 2; i2++) wall[j * nx + i2] = 1;
     }
-    clearField();
+    for (let k = 0, n = nx * ny; k < n; k++) if (wall[k]) { u[k] = 0; up[k] = 0; un[k] = 0; }
   }
-  function clearField() { if (u) { u.fill(0); up.fill(0); un.fill(0); } step = 0; acc = 0; }
+  function clearField() { if (u) { u.fill(0); up.fill(0); un.fill(0); } step = 0; acc = 0; phase = 0; }
 
   const Cc = 0.5, C2 = Cc * Cc, SRC = 16;
   function advance(n) {
@@ -380,10 +388,10 @@ function buildDiffract(ctx) {
       }
       for (let i2 = 0; i2 < nx; i2++) { un[i2] = 0; un[(ny - 1) * nx + i2] = 0; }
       for (let j = 0; j < ny; j++) { un[j * nx] = 0; un[j * nx + nx - 1] = 0; }
-      // 平面波源（左端の列）
-      const per = st.lam / Cc;
-      const amp = Math.min(1, step / (2 * per));
-      const sv = amp * sinT(step / per);
+      // 平面波源（左側の列）: λ を変えても位相は連続
+      phase += Cc / st.lam;
+      const amp = Math.min(1, step * Cc / (2 * st.lam));
+      const sv = amp * sinT(phase);
       for (let j = 1; j < ny - 1; j++) un[j * nx + SRC] = sv;
       const tmp = up; up = u; u = un; un = tmp;
       step++;
@@ -421,12 +429,25 @@ function buildDiffract(ctx) {
       cv.textPx('λ = ' + (st.lam | 0) + ' セル　スリット幅 w = ' + (st.w | 0) + ' セル　→　w/λ = ' + fmt(st.w / st.lam, 2)
         + '　（格子 ' + nx + '×' + ny + '）', cv.pad.l + 8, cv.pad.t + 12, { align: 'left', color: C.muted, size: 12 });
       // λ 目盛り
-      const x0 = cv.pad.l + 8, yb = cv.pad.t + cv.ih - 14;
+      const x0 = cv.pad.l + cv.iw - 12 - st.lam * cell, yb = cv.pad.t + cv.ih - 14;
       g.save(); g.strokeStyle = C.yellow; g.lineWidth = 2; g.beginPath();
       g.moveTo(x0, yb - 5); g.lineTo(x0, yb); g.lineTo(x0 + st.lam * cell, yb); g.lineTo(x0 + st.lam * cell, yb - 5); g.stroke(); g.restore();
       cv.textPx('λ', x0 + st.lam * cell / 2, yb - 12, { color: C.yellow, bold: true, size: 12 });
       sSep.box.style.display = st.preset === 'double' ? '' : 'none';
-      RO.set(fmt(st.w / st.lam, 2) + (st.w / st.lam >= 2 ? '　→ ほぼ直進' : st.w / st.lam <= 1 ? '　→ 大きく回り込む' : '　→ 少し広がる'));
+      DBG.probe = () => { // 検証用: 障壁の前後・軸外の振幅（rms）
+        const bx = Math.round(nx * BXR), box = (i0, i1, j0, j1) => {
+          let s = 0, c = 0;
+          for (let j = j0 | 0; j < (j1 | 0); j++) for (let i2 = i0 | 0; i2 < (i1 | 0); i2++) { const v = u[j * nx + i2]; s += v * v; c++; }
+          return Math.sqrt(s / Math.max(1, c));
+        };
+        return {
+          front: box(SRC + 4, bx - 4, ny * 0.3, ny * 0.7),
+          behindAxis: box(bx + 10, bx + 40, ny * 0.42, ny * 0.58),
+          behindOff: box(bx + 10, bx + 40, ny * 0.05, ny * 0.25),
+          nx, ny, step
+        };
+      };
+      RO.set(fmt(st.w / st.lam, 2));
     },
     onReset() { clearField(); },
     onStep(dir) { if (dir > 0) advance(25); },
@@ -450,9 +471,9 @@ function buildInterfere(ctx) {
   ui.slider(ctx.controls, { label: 'λ', min: 0.6, max: 3, step: 0.1, value: 2, unit: 'm', digits: 1, onInput: v => st.lam = v });
   ui.slider(ctx.controls, { label: 'T', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
   const F = ui.formula(ctx.controls, '');
-  ui.note(ctx.controls, '<b>実線同士／破線同士の交点＝強め合い、実線と破線の交点＝弱め合い。</b> 強め合いの点は黄の線（経路差 = mλ）、弱め合いの点は水色の破線（経路差 = (m+½)λ）の上に並ぶ。逆位相にすると役割が入れかわる。');
+  note(ctx.controls, '<b>実線同士／破線同士の交点＝強め合い、実線と破線の交点＝弱め合い。</b> 強め合いの点は黄の線（経路差 = mλ）、弱め合いの点は水色の破線（経路差 = (m+½)λ）の上に並ぶ。逆位相にすると役割が入れかわる。');
   ui.slider(ctx.detail, { label: '明るさ', min: 0.5, max: 2.5, step: 0.1, value: 1, digits: 1, onInput: v => st.gain = v });
-  ui.note(ctx.detail, 'y(x,y,t) = A sin2π(t/T − r₁/λ) + A sin(2π(t/T − r₂/λ) + φ) を各点で計算して濃淡で表示（振幅の減衰は考えない）。');
+  note(ctx.detail, 'y(x,y,t) = A sin2π(t/T − r₁/λ) + A sin(2π(t/T − r₂/λ) + φ) を各点で計算して濃淡で表示（振幅の減衰は考えない）。');
 
   cv.addHandle({ get: () => P, set: (x, y) => { P.x = x; P.y = y; }, color: C.yellow, label: 'P', r: 26, size: 8 });
 
@@ -486,7 +507,7 @@ function buildInterfere(ctx) {
           const r1 = Math.sqrt(a * a + q1), r2 = Math.sqrt(b * b + q2);
           let v = (sinT(ph - r1 / lam) + sinT(ph - r2 / lam + phi)) * 0.5 * gain;
           if (v > 1) v = 1; else if (v < -1) v = -1;
-          const m = Math.pow(Math.abs(v), 0.8), o = 4 * (j * W + i2);
+          const m = Math.pow(Math.abs(v), 1.25), o = 4 * (j * W + i2);
           if (v >= 0) { dd[o] = 84 * m; dd[o + 1] = 255 * m; dd[o + 2] = 138 * m; }
           else { dd[o] = 60 * m; dd[o + 1] = 130 * m; dd[o + 2] = 255 * m; }
         }
@@ -504,8 +525,8 @@ function buildInterfere(ctx) {
         for (const [S, base] of [[S1, base1], [S2, base2]]) {
           for (let n = -2; n * lam + base < rmax; n++) {
             const rc = base + n * lam; if (rc <= 0.02) continue;
-            cv.circle(S.x, S.y, rc, { color: hexA(C.wave, .75), width: 1.4 });
-            const rt = rc + lam / 2; if (rt < rmax) cv.circle(S.x, S.y, rt, { color: hexA(C.wave1, .75), width: 1.4, dash: [6, 5] });
+            cv.circle(S.x, S.y, rc, { color: hexA(C.text, .9), width: 1.6 });
+            const rt = rc + lam / 2; if (rt < rmax) cv.circle(S.x, S.y, rt, { color: hexA(C.text, .55), width: 1.4, dash: [6, 5] });
           }
         }
       }
@@ -550,6 +571,8 @@ function buildInterfere(ctx) {
       cv.drawHandles();
 
       // --- 読み出し ---
+      DBG.P = P; DBG.st = st;
+      DBG.toPage = (wx, wy) => { const r = cv.el.getBoundingClientRect(); return { x: r.left + cv.px(wx), y: r.top + cv.py(wy) }; };
       const r1 = Math.hypot(P.x - S1.x, P.y - S1.y), r2 = Math.hypot(P.x - S2.x, P.y - S2.y);
       const dr = Math.abs(r1 - r2), q = dr / lam, near = q - Math.floor(q);
       const isInt = Math.min(near, 1 - near) < 0.06, isHalf = Math.abs(near - 0.5) < 0.06;
