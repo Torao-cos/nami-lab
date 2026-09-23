@@ -10,37 +10,34 @@
 .stage .panel ~ .panel .status{display:none}
 .stage .panel.max .status{display:block}
 
-.stage.stage-yxyt,.stage.stage-vel{flex:1;min-height:0;overflow:hidden}
+/* 4・5 とも「2列×2段＝4グラフ1画面」 */
+.stage.stage-yxyt,.stage.stage-vel{flex:1;min-height:0;overflow:hidden;
+  grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+.stage.stage-yxyt .panel,.stage.stage-vel .panel{min-height:128px}
+.stage.stage-yxyt .panel canvas,.stage.stage-vel .panel canvas{min-height:92px}
+/* 見出しは1行に固定（左右の段の高さをそろえて、補助線の高さを見比べられるようにする） */
+.stage.stage-yxyt .panelTitle,.stage.stage-vel .panelTitle{
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:6.5rem}
 
-/* 4: 上下2段 */
-.stage.stage-yxyt{grid-template-columns:1fr;grid-auto-rows:1fr}
-.stage.stage-yxyt .panel{min-height:150px}
-.stage.stage-yxyt .panel canvas{min-height:120px}
-
-/* 5: 左列＝y-x（上）/ v-x（下）、右列＝P の y-t（縦2段ぶち抜き） */
-.stage.stage-vel{grid-template-columns:1.32fr 1fr;grid-template-rows:1fr 1fr}
-.stage.stage-vel .pY{grid-column:1;grid-row:1}
-.stage.stage-vel .pV{grid-column:1;grid-row:2}
-.stage.stage-vel .pP{grid-column:2;grid-row:1/3}
-.stage.stage-vel.vxOff .pY{grid-row:1/3}
-.stage.stage-vel .panel{min-height:150px}
-.stage.stage-vel .panel canvas{min-height:110px}
+.stage .pA{grid-column:1;grid-row:1}   /* 左上 */
+.stage .pB{grid-column:1;grid-row:2}   /* 左下 */
+.stage .pC{grid-column:2;grid-row:1}   /* 右上 */
+.stage .pD{grid-column:2;grid-row:2}   /* 右下 */
 
 /* 1面最大化（見出しクリック）時 */
+.stage.stage-yxyt.hasMax,.stage.stage-vel.hasMax{grid-template-rows:1fr !important}
+.stage.stage-yxyt.hasMax .panel,.stage.stage-vel.hasMax .panel{grid-column:1 !important;grid-row:1 !important}
 .stage.stage-yxyt .panel.max,.stage.stage-vel .panel.max{min-height:0}
-.stage.stage-vel.hasMax{grid-template-rows:1fr !important}
-.stage.stage-vel.hasMax .panel{grid-column:1 !important;grid-row:1 !important}
 
-/* スマホ縦持ち: 全部1列に縦積み */
+/* スマホ縦持ち: 全部1列に縦積み（DOM順＝左上→左下→右上→右下） */
 @media (max-width:760px){
   .stage.stage-yxyt,.stage.stage-vel{flex:0 1 auto;overflow:visible;
     grid-template-columns:1fr;grid-template-rows:none;grid-auto-rows:auto}
-  .stage.stage-vel .pY,.stage.stage-vel .pV,.stage.stage-vel .pP{grid-column:1;grid-row:auto}
-  .stage.stage-yxyt .panel,.stage.stage-vel .panel{min-height:200px}
+  .stage.stage-yxyt .panel,.stage.stage-vel .panel{grid-column:1;grid-row:auto;min-height:205px}
   .stage.stage-yxyt .panel canvas,.stage.stage-vel .panel canvas{min-height:160px}
   .stage.stage-yxyt .panel.max,.stage.stage-vel .panel.max{min-height:70vh}
-  /* 見出しが長いと停止中バッジの下にもぐるので1行省略＋右に場所をあける */
-  .stage .panel .panelTitle{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:11.5rem}
+  /* 見出しが長いと停止中バッジの下にもぐるので右に場所をあける */
+  .stage.stage-yxyt .panelTitle,.stage.stage-vel .panelTitle{padding-right:11.5rem}
   .stage .panel .status{font-size:.8rem;padding:.15rem .35rem}
 }
 </style></head><body>
@@ -48,137 +45,201 @@
 <script>
 (() => {
 'use strict';
-const { C, TAU, ui, fmt, clamp, recorder, hexA } = Nami;
+const { C, TAU, ui, fmt, clamp, recorder, recorderWindow, hexA } = Nami;
 
 const XMAX = 10;                       // x 範囲 0〜10 m
 const DBG = (window.__nami_debug = window.__nami_debug || {});
+const sgn = v => (v >= 0 ? '+' : '');
 
 /* ============================================================
-   4  y-x ⇄ y-t
+   4  y-x ⇄ y-t   （2列×2段）
+     左列＝場所を決めて時間を見る（y-x → y-t）… 時間が流れる
+     右列＝時刻を決めて場所を見る（y-t → y-x）… 時刻を手で選ぶ
    ============================================================ */
-const S4 = { lambda: 2.0, T: 2.0, A: 1.0, dir: 1, n: 1,
-             cuts: [{ x: 2.5 }, { x: 5.0 }, { x: 7.5 }] };
-const CUT_C = [C.yellow, C.anti, C.dens];          // 黄 / 水色 / 紫
-const CUT_L = ['P₁', 'P₂', 'P₃'];
+const S4 = { lambda: 2.0, T: 2.0, A: 1.0, dir: 1,
+             x0: 2.5, tStart: 0,           // 左: 観測点と「記録を始めた時刻」
+             x1: 5.0, t1: 1.5 };           // 右: 場所と時刻カーソル
 // 右進行 y = A sin2π(t/T − x/λ)／左進行は dir = −1
 const y4 = (x, t) => S4.A * Math.sin(TAU * (t / S4.T - S4.dir * x / S4.lambda));
-const yt4 = (i, tau) => S4.A * Math.sin(TAU * (tau / S4.T - S4.dir * S4.cuts[i].x / S4.lambda));
+const span4 = () => 4 * S4.T;             // 右上の静止 y-t は 0〜4T／左下の記録計も 1ページ＝4T
 
 function build4(ctx) {
-  ctx.layout('1');
+  ctx.layout('2x2');
   ctx.stage.classList.add('stage-yxyt');
-  const cvX = ctx.canvas({ title: 'y-x グラフ ― ある瞬間の波の形（カット線 x = x₀ をドラッグ）' });
-  const cvT = ctx.canvas({ title: 'y-t グラフ ― 各 x₀ にある媒質の振動（ペンが右へ進んで記録。右端まで来たら次のページへ）' });
-  let curT = 0;
+  const cvA = ctx.canvas({ className: 'pA', title: '左：時間が流れる ― y-x グラフ（いまの波の形。観測点 x₀ を波の上でドラッグ）' });
+  const cvB = ctx.canvas({ className: 'pB', title: 'x₀ の y-t グラフ（x₀ を動かした瞬間から記録）' });
+  const cvC = ctx.canvas({ className: 'pC', title: '右：時刻を手で選ぶ ― x₁ の y-t グラフ（静止。時刻カーソル t₁ をドラッグ）' });
+  const cvD = ctx.canvas({ className: 'pD', title: '時刻 t₁ の y-x グラフ（その瞬間の波の写真・静止。x₁ をドラッグ）' });
+  let curT = 0, pendStart = null, titleC = '', titleD = '';
 
-  /* --- ドラッグできるカット線（つかむ点は波の上の媒質点・x 方向のみ動く） --- */
-  S4.cuts.forEach((c, i) => {
-    c.h = cvX.addHandle({
-      r: 26, size: 8, color: CUT_C[i], label: CUT_L[i],
-      get: () => ({ x: c.x, y: y4(c.x, curT) }),
-      set: x => { c.x = clamp(x, 0, XMAX); }
-    });
+  /* --- 左: 観測点 x₀（黄）。つかむ点は波の上の媒質点・x 方向のみ動く --- */
+  cvA.addHandle({
+    r: 28, size: 8, color: C.yellow, label: 'x₀',
+    get: () => ({ x: S4.x0, y: y4(S4.x0, curT) }),
+    onStart: () => { pendStart = curT; },                       // ドラッグ開始時刻を控える
+    onEnd: () => { pendStart = null; },
+    set: x => { if (pendStart != null) { S4.tStart = pendStart; pendStart = null; } S4.x0 = clamp(x, 0, XMAX); }
   });
 
-  /* --- 操作パネル --- */
-  let addBtn, delBtn;
-  const sync = () => {
-    S4.cuts.forEach((c, i) => { c.h.hidden = i >= S4.n; });
-    addBtn.disabled = S4.n >= 3; delBtn.disabled = S4.n <= 1;
-  };
+  /* --- 右上: 時刻カーソル t₁（水色）。グラフ内をドラッグしても動く --- */
+  cvC.addHandle({
+    r: 28, size: 8, color: C.anti, label: 't₁',
+    get: () => ({ x: S4.t1, y: y4(S4.x1, S4.t1) }),
+    set: x => { S4.t1 = clamp(x, 0, span4()); }
+  });
+  cvC.onDrag = x => { S4.t1 = clamp(x, 0, span4()); };
+
+  /* --- 右下: 場所 x₁（水色） --- */
+  cvD.addHandle({
+    r: 28, size: 8, color: C.anti, label: 'x₁',
+    get: () => ({ x: S4.x1, y: y4(S4.x1, S4.t1) }),
+    set: x => { S4.x1 = clamp(x, 0, XMAX); }
+  });
+
+  /* --- 操作パネル（λ・T・A は左右共通） --- */
   ui.slider(ctx.controls, { label: 'λ 波長', min: 0.5, max: 5, step: 0.1, value: S4.lambda, unit: 'm', onInput: v => S4.lambda = v });
   ui.slider(ctx.controls, { label: 'T 周期', min: 0.5, max: 5, step: 0.1, value: S4.T, unit: 's', onInput: v => S4.T = v });
   ui.slider(ctx.controls, { label: 'A 振幅', min: 0.2, max: 1.5, step: 0.05, value: S4.A, unit: 'm', onInput: v => S4.A = v });
   ui.sep(ctx.controls);
-  const cutBtns = ui.group(ctx.controls, 'カット線');
-  addBtn = ui.button(cutBtns, { label: '＋ 追加', onClick: () => { if (S4.n < 3) S4.n++; sync(); } });
-  delBtn = ui.button(cutBtns, { label: '− 削除', onClick: () => { if (S4.n > 1) S4.n--; sync(); } });
-  ui.legend(ctx.controls, [[CUT_C[0], 'P₁'], [CUT_C[1], 'P₂'], [CUT_C[2], 'P₃']]);
+  ui.legend(ctx.controls, [[C.yellow, '左：観測点 x₀'], [C.anti, '右：x₁ と時刻 t₁']]);
   ui.sep(ctx.controls);
   const rv = ui.readout(ctx.controls, { label: '波の速さ' });
-  const rx = ui.readout(ctx.controls, { label: 'カット位置' });
+  const rL = ui.readout(ctx.controls, { label: '左（いまの時刻）' });
+  const rR = ui.readout(ctx.controls, { label: '右（選んだ時刻）' });
   ui.note(ctx.controls,
-    '上の y-x グラフは「ある瞬間に、場所ごとの変位」を写した写真。下の y-t グラフは「ある場所（カット線 x₀）の媒質が、時間とともにどう動いたか」の記録。' +
-    'カット線を動かして、その場所に次に何がやってくるか（波形のどの部分が x₀ に向かって進んでいるか）を見ながら、y-t の形がどう決まるかを考える。コマ送り（◀▶）が使える。');
+    'y-t グラフは、その場所を見張っていた記録。y-x グラフは、その瞬間の波の写真。');
+  ui.note(ctx.controls,
+    '左の列では時間が流れる。x₀ を置くと、そこから先の記録が下に伸びていく（x₀ を動かすと記録は取り直しになる）。' +
+    '右の列では時刻が止まっている。上の y-t で時刻 t₁ を選ぶと、下にその瞬間の波の形が出る。x₁ を動かすと上の y-t が描き直される。' +
+    '停止（クリック）・コマ送り ◀▶・時間バーはいつでも使える。');
   ui.toggle(ctx.detail, { label: '進行方向を反転する（左へ進む波）', checked: false, onChange: b => S4.dir = b ? -1 : 1 });
   ui.note(ctx.detail, '左へ進む波の式は y = A sin2π(t/T + x/λ)。');
-  sync();
 
   DBG.sim4 = ctx.sim;
-  DBG.setCut = (i, x) => { S4.cuts[i].x = clamp(x, 0, XMAX); };
-  DBG.setCutCount = n => { S4.n = clamp(n, 1, 3); sync(); };
+  DBG.setX0 = (x, restart) => { if (restart !== false) S4.tStart = curT; S4.x0 = clamp(x, 0, XMAX); };
+  DBG.setX1 = x => { S4.x1 = clamp(x, 0, XMAX); };
+  DBG.setT1 = t => { S4.t1 = clamp(t, 0, span4()); };
+  DBG.setDir4 = d => { S4.dir = d < 0 ? -1 : 1; };
+  DBG.handleA4 = () => { const r = cvA.el.getBoundingClientRect(); return { x: r.left + cvA.px(S4.x0), y: r.top + cvA.py(y4(S4.x0, curT)) }; };
+  DBG.handleC4 = () => { const r = cvC.el.getBoundingClientRect(); return { x: r.left + cvC.px(S4.t1), y: r.top + cvC.py(y4(S4.x1, S4.t1)) }; };
 
   return {
+    onReset() { S4.tStart = 0; },
     draw(t) {
       curT = t;
-      const A = S4.A, v = S4.lambda / S4.T, span = 4 * S4.T;
-      const yr = A * 1.55, tLeft = Math.max(0, t - span);
-      const cuts = S4.cuts.slice(0, S4.n);
+      const A = S4.A, T = S4.T, L = S4.lambda, v = L / T, yr = A * 1.55, span = span4();
+      S4.t1 = clamp(S4.t1, 0, span);
+      const yL = y4(S4.x0, t);            // 左: いまの時刻の x₀ の変位
+      const yR = y4(S4.x1, S4.t1);        // 右: 選んだ時刻 t₁ の x₁ の変位（上下のパネルで共通）
+      const win = recorderWindow(t, span);
+      const recording = t > S4.tStart + 1e-12;
 
-      /* ---------- 上: y-x ---------- */
-      cvX.clear();
-      cvX.setView({ x0: 0, x1: XMAX, y0: -yr, y1: yr });
-      cvX.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1 });
-      cvX.clip(() => cvX.plot(x => y4(x, t), { color: C.wave, width: 3 }));
-      // カット線
-      cuts.forEach((c, i) => {
-        cvX.line(c.x, -yr, c.x, yr, { color: CUT_C[i], width: 2, dash: [6, 5], alpha: 0.9 });
-        cvX.text('x₀ = ' + fmt(c.x, 2), c.x, -yr, { color: CUT_C[i], size: 12, baseline: 'bottom', dy: -3 });
-      });
-      // 進行方向
+      /* ---------- 左上: 動き続ける y-x ---------- */
+      cvA.clear();
+      cvA.setView({ x0: 0, x1: XMAX, y0: -yr, y1: yr });
+      cvA.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1 });
+      cvA.clip(() => cvA.plot(x => y4(x, t), { color: C.wave, width: 3 }));
+      cvA.line(S4.x0, -yr, S4.x0, yr, { color: C.yellow, width: 2, dash: [6, 5], alpha: 0.85 });
+      cvA.line(0, yL, S4.x0, yL, { color: hexA(C.yellow, 0.4), width: 1.5, dash: [4, 4] });
+      cvA.text('x₀ = ' + fmt(S4.x0, 2) + ' m', S4.x0, -yr, { color: C.yellow, size: 12, baseline: 'bottom', dy: -3 });
       const ax0 = S4.dir > 0 ? 8.4 : 9.4;
-      cvX.arrow(ax0, yr * 0.85, ax0 + S4.dir, yr * 0.85, { color: C.muted, width: 2, head: 10 });
-      cvX.text('進行方向', 8.9, yr * 0.85, { color: C.muted, size: 12, dy: -15 });
-      cvX.drawHandles();
+      cvA.arrow(ax0, yr * 0.85, ax0 + S4.dir, yr * 0.85, { color: C.muted, width: 2, head: 10 });
+      cvA.text('進行方向', 8.9, yr * 0.85, { color: C.muted, size: 12, dy: -15 });
+      cvA.drawHandles();
 
-      /* ---------- 下: y-t（記録計・右端が現在） ---------- */
-      cvT.clear();
-      recorder(cvT, {
-        t, span, A, y0: -yr, y1: yr, color: CUT_C[0], width: 3,
-        xLabel: 't [s]', yLabel: 'y [m]', y: tau => yt4(0, tau)
+      /* ---------- 左下: x₀ の y-t（記録計・ペンが右へ進む） ---------- */
+      cvB.clear();
+      recorder(cvB, {
+        t, span, A, y0: -yr, y1: yr, color: C.yellow, width: 3, pen: false,
+        xLabel: 't [s]', yLabel: 'y [m]',
+        y: tau => (tau < S4.tStart ? null : y4(S4.x0, tau))
       });
-      for (let i = 1; i < cuts.length; i++) {
-        cvT.clip(() => cvT.plot(tau => yt4(i, tau), { color: CUT_C[i], width: 3, x0: tLeft, x1: t }));
-        cvT.dot(t, yt4(i, t), 5, { color: CUT_C[i], stroke: '#000' });
+      if (S4.tStart > win.x0 && S4.tStart <= win.x1) {
+        cvB.line(S4.tStart, -yr, S4.tStart, yr, { color: hexA(C.yellow, 0.5), width: 1.5, dash: [3, 4] });
+        cvB.text('記録開始 t = ' + fmt(S4.tStart, 2) + ' s', S4.tStart, yr, { color: hexA(C.yellow, 0.8), size: 11, baseline: 'top', dy: 3 });
       }
-      if (cvT.w > 520) cuts.forEach((c, i) => cvT.text(CUT_L[i], t, yt4(i, t),   // 狭い画面では凡例に任せる
-        { color: CUT_C[i], bold: true, dx: -20, dy: [-16, 18, -36][i], size: 13 }));
+      if (recording) {
+        cvB.line(win.x0, yL, t, yL, { color: hexA(C.yellow, 0.4), width: 1.5, dash: [4, 4] });
+        cvB.dot(t, yL, 5.5, { color: C.yellow, stroke: '#000' });
+      } else {
+        cvB.textPx('x₀ を置いた時刻 t = ' + fmt(S4.tStart, 2) + ' s。ここから先が記録される。',
+          cvB.pad.l + cvB.iw / 2, cvB.pad.t + cvB.ih / 2, { color: C.muted, size: 13 });
+      }
+
+      /* ---------- 右上: x₁ の y-t（全区間を描いた静止画）＋時刻カーソル t₁ ---------- */
+      cvC.clear();
+      cvC.setView({ x0: 0, x1: span, y0: -yr, y1: yr });
+      cvC.axes({ xLabel: 't [s]', yLabel: 'y [m]' });
+      cvC.clip(() => cvC.plot(tau => y4(S4.x1, tau), { color: C.anti, width: 3 }));
+      cvC.line(0, yR, S4.t1, yR, { color: hexA(C.anti, 0.5), width: 1.5, dash: [4, 4] });   // ← 下段と同じ高さの補助線
+      cvC.line(S4.t1, -yr, S4.t1, yr, { color: C.anti, width: 2 });
+      cvC.text('t₁ = ' + fmt(S4.t1, 2) + ' s', S4.t1, -yr, { color: C.anti, size: 12, baseline: 'bottom', dy: -3 });
+      cvC.text('y = ' + sgn(yR) + fmt(yR, 2) + ' m', S4.t1 * 0.5, yR, { color: C.anti, size: 12, dy: -10 });
+      cvC.drawHandles();
+
+      /* ---------- 右下: 時刻 t₁ の y-x（波の写真・静止） ---------- */
+      cvD.clear();
+      cvD.setView({ x0: 0, x1: XMAX, y0: -yr, y1: yr });
+      cvD.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1 });
+      cvD.clip(() => cvD.plot(x => y4(x, S4.t1), { color: C.wave, width: 3 }));
+      cvD.line(0, yR, S4.x1, yR, { color: hexA(C.anti, 0.5), width: 1.5, dash: [4, 4] });   // ← 上段と同じ高さの補助線
+      cvD.line(S4.x1, -yr, S4.x1, yr, { color: C.anti, width: 2, dash: [6, 5], alpha: 0.85 });
+      cvD.text('x₁ = ' + fmt(S4.x1, 2) + ' m', S4.x1, -yr, { color: C.anti, size: 12, baseline: 'bottom', dy: -3 });
+      cvD.text('y = ' + sgn(yR) + fmt(yR, 2) + ' m', S4.x1 * 0.5, yR, { color: C.anti, size: 12, dy: -10 });
+      const dx1 = S4.dir > 0 ? 8.4 : 9.4;
+      cvD.arrow(dx1, yr * 0.85, dx1 + S4.dir, yr * 0.85, { color: C.muted, width: 2, head: 10 });
+      cvD.drawHandles();
+
+      /* ---------- 見出し（値つき） ---------- */
+      const tC = `右：時刻を手で選ぶ ― x₁ = ${fmt(S4.x1, 2)} m の y-t グラフ（0〜${fmt(span, 1)} s・静止。t₁ をドラッグ）`;
+      if (tC !== titleC) { cvC.setTitle(tC); titleC = tC; }
+      const tD = `時刻 t₁ = ${fmt(S4.t1, 2)} s の y-x グラフ（波の写真・静止。x₁ をドラッグ）`;
+      if (tD !== titleD) { cvD.setTitle(tD); titleD = tD; }
 
       /* ---------- 読み出し ---------- */
-      rv.set(`v = λ/T = ${fmt(S4.lambda, 2)} / ${fmt(S4.T, 2)} = ${fmt(v, 2)} m/s` + (S4.dir < 0 ? '（左向き）' : '（右向き）'));
-      rx.set(cuts.map((c, i) => `${CUT_L[i]} x₀=${fmt(c.x, 2)} m`).join('　'));
+      rv.set(`v = λ/T = ${fmt(L, 2)} / ${fmt(T, 2)} = ${fmt(v, 2)} m/s` + (S4.dir < 0 ? '（左向き）' : '（右向き）'));
+      rL.set(`x₀ = ${fmt(S4.x0, 2)} m　t = ${fmt(t, 2)} s　y = ${sgn(yL)}${fmt(yL, 2)} m`);
+      rR.set(`x₁ = ${fmt(S4.x1, 2)} m　t₁ = ${fmt(S4.t1, 2)} s　y = ${sgn(yR)}${fmt(yR, 2)} m`);
 
       /* ---------- 検証用 ---------- */
-      DBG.b4 = { t, dir: S4.dir, v, span, n: S4.n, cuts: cuts.map(c => c.x) };
+      DBG.b4 = {
+        t, dir: S4.dir, v, span, yr,
+        x0: S4.x0, tStart: S4.tStart, recording, yLeft: yL,
+        x1: S4.x1, t1: S4.t1,
+        yTop: y4(S4.x1, S4.t1),              // 右上のカーソル位置で読んだ変位
+        yBot: S4.A * Math.sin(TAU * (S4.t1 / T - S4.dir * S4.x1 / L)), // 右下の写真の x₁ での変位（独立に計算）
+        winB: win
+      };
     }
   };
 }
 
 /* ============================================================
-   5  媒質の速度
+   5  媒質の速度   （2列×2段）
+     左列＝場所で見る（y-x ／ v-x）／右列＝時間で見る（y-t ／ v-t）
    ============================================================ */
 const S5 = { lambda: 2.0, T: 2.0, A: 1.0, dir: 1, dtFrac: 1 / 12, xP: 2.5,
-             arrows: true, ghost: true, showVx: true };
+             arrows: true, ghost: true };
 const y5 = (x, t) => S5.A * Math.sin(TAU * (t / S5.T - S5.dir * x / S5.lambda));
 const vy5 = (x, t) => S5.A * (TAU / S5.T) * Math.cos(TAU * (t / S5.T - S5.dir * x / S5.lambda));
-const ytP5 = tau => S5.A * Math.sin(TAU * (tau / S5.T - S5.dir * S5.xP / S5.lambda));
 const NARR = 24;
 
 function build5(ctx) {
-  ctx.layout('1');
+  ctx.layout('2x2');
   ctx.stage.classList.add('stage-vel');
-  const cvY = ctx.canvas({ className: 'pY', title: 'y-x グラフ ＋ 媒質の速度ベクトル（橙）と Δt 後のゴースト波形' });
-  const cvV = ctx.canvas({ className: 'pV', title: 'v-x グラフ ― その瞬間の各位置の速度' });
-  const cvP = ctx.canvas({ className: 'pP', title: '注目点 P の y-t グラフ' });
-  cvP.setPad({ r: 48 });
-  let curT = 0, lastTitle = '';
+  const cvY = ctx.canvas({ className: 'pA', title: 'y-x グラフ ＋ 媒質の速度ベクトル（橙）と Δt 後のゴースト波形' });
+  const cvV = ctx.canvas({ className: 'pB', title: 'v-x グラフ ― その瞬間の、場所ごとの媒質の速度（橙）' });
+  const cvP = ctx.canvas({ className: 'pC', title: '注目点 P の y-t グラフ ＋ 接線' });
+  const cvW = ctx.canvas({ className: 'pD', title: 'P の v-t グラフ ― 真上の接線の傾きと同じ値' });
+  cvP.setPad({ l: 54, r: 20 }); cvW.setPad({ l: 54, r: 20 });   // 右列2段の t 軸をそろえる
+  let curT = 0, titleP = '';
 
-  const mkHandle = cv => cv.addHandle({
-    r: 26, size: 8, color: C.yellow, label: 'P',
-    get: () => ({ x: S5.xP, y: cv === cvY ? y5(S5.xP, curT) : vy5(S5.xP, curT) }),
+  const mkHandle = (cv, yOf) => cv.addHandle({
+    r: 28, size: 8, color: C.yellow, label: 'P',
+    get: () => ({ x: S5.xP, y: yOf(S5.xP, curT) }),
     set: x => { S5.xP = clamp(x, 0, XMAX); }
   });
-  mkHandle(cvY); mkHandle(cvV);
+  mkHandle(cvY, y5); mkHandle(cvV, vy5);
 
   let dtSl;
   ui.slider(ctx.controls, { label: 'λ 波長', min: 0.5, max: 5, step: 0.1, value: S5.lambda, unit: 'm', onInput: v => S5.lambda = v });
@@ -191,15 +252,14 @@ function build5(ctx) {
   ui.sep(ctx.controls);
   ui.toggle(ctx.controls, { label: '速度矢印', checked: S5.arrows, onChange: b => S5.arrows = b });
   ui.toggle(ctx.controls, { label: 'ゴースト波形', checked: S5.ghost, onChange: b => S5.ghost = b });
-  ui.toggle(ctx.controls, {
-    label: 'v-x グラフ', checked: S5.showVx,
-    onChange: b => { S5.showVx = b; cvV.box.style.display = b ? '' : 'none'; ctx.stage.classList.toggle('vxOff', !b); }
-  });
   ui.legend(ctx.controls, [[C.vel, '上向き'], [hexA(C.vel, 0.45), '下向き'], [C.ghost, 'Δt 後']]);
   ui.sep(ctx.controls);
-  const rP = ui.readout(ctx.controls, { label: 'P の速度' });
-  const rM = ui.readout(ctx.controls, { label: '最大・波の速さ' });
-  ui.note(ctx.controls, 'y-t グラフの傾き＝媒質の速度。y-x グラフの傾きは速度ではない（形の傾き）。');
+  const rP = ui.readout(ctx.controls, { label: 'P の速度（y-t の傾き）' });
+  const rMax = ui.readout(ctx.controls, { label: '媒質の速さの最大' });
+  const rWav = ui.readout(ctx.controls, { label: '波の速さ' });
+  ui.note(ctx.controls,
+    '左の2段は同じ x 軸、右の2段は同じ t 軸で並べてある。速度矢印の長さは v·Δt（矢の先が Δt 後のゴースト波形の上に乗る）。' +
+    'y-t グラフの傾きは媒質の速度。y-x グラフの傾きは波形の傾きで、速度ではない。');
   ui.toggle(ctx.detail, { label: '進行方向を反転する（左へ進む波）', checked: false, onChange: b => S5.dir = b ? -1 : 1 });
   ui.note(ctx.detail, '進行方向を変えると、同じ形の波でも各点の速度の向きが入れかわる（ゴースト波形が逆へずれる）。y-x の形だけでは速度は決まらない。');
 
@@ -211,10 +271,10 @@ function build5(ctx) {
     draw(t) {
       curT = t;
       const A = S5.A, T = S5.T, L = S5.lambda, dt = S5.dtFrac * T;
-      const vmax = TAU * A / T, kArr = dt > 0 ? dt : 0.75 * A / vmax;   // 矢印の長さ＝Δt の間の移動量 v·Δt（ゴースト波形の上に矢印の先が乗る）
-      const yr = A * 1.7, vr = vmax * 1.35;
+      const vmax = TAU * A / T, kArr = dt > 0 ? dt : 0.75 * A / vmax;   // 矢印の長さ＝Δt の間の移動量 v·Δt
+      const yr = A * 1.7, vr = vmax * 1.35, yrP = A * 1.55;
       const yP = y5(S5.xP, t), vP = vy5(S5.xP, t);
-      const sgn = x => (x >= 0 ? '+' : '');
+      const span = 2 * T, win = recorderWindow(t, span);
 
       /* ---------- 左上: y-x ＋ 速度矢印 ＋ ゴースト ---------- */
       cvY.clear();
@@ -239,44 +299,56 @@ function build5(ctx) {
       cvY.text('進行方向', 8.9, -yr * 0.85, { color: C.muted, size: 12, dy: -15 });
       cvY.drawHandles();
 
-      /* ---------- 左下: v-x ---------- */
-      if (S5.showVx) {
-        cvV.clear();
-        cvV.setView({ x0: 0, x1: XMAX, y0: -vr, y1: vr });
-        cvV.axes({ xLabel: 'x [m]', yLabel: 'v [m/s]', xStep: 1 });
-        cvV.clip(() => cvV.plot(x => vy5(x, t), { color: C.vel, width: 3 }));
-        cvV.line(S5.xP, -vr, S5.xP, vr, { color: hexA(C.yellow, 0.45), width: 1.5, dash: [5, 5] });
-        cvV.drawHandles();
-      }
+      /* ---------- 左下: v-x（左上と同じ x 軸） ---------- */
+      cvV.clear();
+      cvV.setView({ x0: 0, x1: XMAX, y0: -vr, y1: vr });
+      cvV.axes({ xLabel: 'x [m]', yLabel: 'v [m/s]', xStep: 1 });
+      cvV.clip(() => cvV.plot(x => vy5(x, t), { color: C.vel, width: 3 }));
+      cvV.line(S5.xP, -vr, S5.xP, vr, { color: hexA(C.yellow, 0.45), width: 1.5, dash: [5, 5] });
+      cvV.line(0, vP, S5.xP, vP, { color: hexA(C.vel, 0.45), width: 1.5, dash: [4, 4] });
+      cvV.drawHandles();
 
-      /* ---------- 右: P の y-t ＋ 接線 ---------- */
+      /* ---------- 右上: P の y-t ＋ 接線 ---------- */
       cvP.clear();
-      const span = 2.2 * T;
-      recorder(cvP, { t, span, A, y0: -A * 1.55, y1: A * 1.55, color: C.yellow, width: 3, xLabel: 't [s]', yLabel: 'y [m]', y: ytP5 });
-      const t1 = t - 0.5 * T, t2 = t + 0.1 * T;
+      recorder(cvP, { t, span, A, y0: -yrP, y1: yrP, color: C.yellow, width: 3, pen: false, xLabel: 't [s]', yLabel: 'y [m]', y: tau => y5(S5.xP, tau) });
+      const t1 = t - 0.42 * T, t2 = t + 0.42 * T;
       const g1 = yP + vP * (t1 - t), g2 = yP + vP * (t2 - t);
-      const gc = cvP.ctx;                                              // 接線（縦は作図域で切る・右は余白まで伸ばす）
-      gc.save(); gc.beginPath(); gc.rect(cvP.pad.l, cvP.pad.t, cvP.iw + cvP.pad.r - 6, cvP.ih); gc.clip();
-      cvP.line(t1, g1, t2, g2, { color: C.vel, width: 2.5 });
-      gc.restore();
+      cvP.clip(() => cvP.line(t1, g1, t2, g2, { color: C.vel, width: 2.5 }));
+      cvP.line(t, -yrP, t, yrP, { color: hexA(C.text, 0.35), width: 1.5, dash: [4, 4] });   // ← 下段と貫通する「いまの時刻」
       cvP.dot(t, yP, 5.5, { color: C.yellow, stroke: '#000' });
       cvP.textPx('接線の傾き = ' + sgn(vP) + fmt(vP, 2) + ' m/s',
         cvP.pad.l + 8, cvP.pad.t + cvP.ih - 12, { color: C.vel, bold: true, size: 14, align: 'left' });
-      const title = `注目点 P（x₀ = ${fmt(S5.xP, 2)} m）の y-t グラフ ― 接線の傾き＝P の速度`;
-      if (title !== lastTitle) { cvP.setTitle(title); lastTitle = title; }
 
-      /* ---------- 読み出し ---------- */
-      rP.set(`P の速度 v = ${sgn(vP)}${fmt(vP, 2)} m/s（y-t の傾き）`);
-      rM.set(`媒質の速さの最大 = ${fmt(vmax, 2)} m/s（変位 0 を通る瞬間・y-t の傾きが最も急）　波の速さ v = λ/T = ${fmt(L / T, 2)} m/s（山が進む速さ）`);
+      /* ---------- 右下: P の v-t（右上と同じ t 軸） ---------- */
+      cvW.clear();
+      recorder(cvW, { t, span, A, y0: -vr, y1: vr, color: C.vel, width: 3, pen: false, xLabel: 't [s]', yLabel: 'v [m/s]', y: tau => vy5(S5.xP, tau) });
+      cvW.line(win.x0, vP, t, vP, { color: hexA(C.vel, 0.45), width: 1.5, dash: [4, 4] });
+      cvW.line(t, -vr, t, vr, { color: hexA(C.text, 0.35), width: 1.5, dash: [4, 4] });     // ← 上段と貫通する「いまの時刻」
+      cvW.dot(t, vP, 5.5, { color: C.vel, stroke: '#000' });
+      cvW.textPx('v = ' + sgn(vP) + fmt(vP, 2) + ' m/s',
+        cvW.pad.l + 8, cvW.pad.t + cvW.ih - 12, { color: C.vel, bold: true, size: 14, align: 'left' });
+
+      /* ---------- 見出し（値つき） ---------- */
+      const tp = `注目点 P（x = ${fmt(S5.xP, 2)} m）の y-t グラフ ＋ 接線（傾き＝P の速度）`;
+      if (tp !== titleP) { cvP.setTitle(tp); titleP = tp; }
+
+      /* ---------- 読み出し（3つの「速さ」を区別する） ---------- */
+      rP.set(`v = ${sgn(vP)}${fmt(vP, 2)} m/s（いまの P の媒質の速度）`);
+      rMax.set(`2πA/T = ${fmt(vmax, 2)} m/s（変位 0 を通る瞬間の媒質の速さ）`);
+      rWav.set(`v = λ/T = ${fmt(L / T, 2)} m/s（山が進む速さ＝波の速さ）`);
 
       /* ---------- 検証用 ---------- */
       const h = 1e-5;
       DBG.b5 = {
-        t, xP: S5.xP, A, T, lambda: L, dir: S5.dir, dt,
+        t, xP: S5.xP, A, T, lambda: L, dir: S5.dir, dt, span,
         vAnalytic: vP,
         slopeDrawn: (g2 - g1) / (t2 - t1),
-        slopeNumeric: (ytP5(t + h) - ytP5(t - h)) / (2 * h),
-        vmax
+        slopeNumeric: (y5(S5.xP, t + h) - y5(S5.xP, t - h)) / (2 * h),
+        vtAtNow: vy5(S5.xP, t),
+        vmax,
+        winP: win, winW: recorderWindow(t, span),
+        padP: Object.assign({}, cvP.pad), padW: Object.assign({}, cvW.pad),
+        pxP: cvP.px(t), pxW: cvW.px(t)
       };
     }
   };
