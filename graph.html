@@ -39,6 +39,9 @@
   .stage.stage-yxyt .panel,.stage.stage-vel .panel{min-height:200px}
   .stage.stage-yxyt .panel canvas,.stage.stage-vel .panel canvas{min-height:160px}
   .stage.stage-yxyt .panel.max,.stage.stage-vel .panel.max{min-height:70vh}
+  /* 見出しが長いと停止中バッジの下にもぐるので1行省略＋右に場所をあける */
+  .stage .panel .panelTitle{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:11.5rem}
+  .stage .panel .status{font-size:.8rem;padding:.15rem .35rem}
 }
 </style></head><body>
 <script src="common.js"></script>
@@ -155,8 +158,8 @@ function build4(ctx) {
           return (x < 0 || x > XMAX) ? null : y4(x, t);
         }, { color: CUT_C[i], width: 6, alpha: 0.5, dash: [9, 6], x0: tLeft, x1: t });
       }));
-      cuts.forEach((c, i) => cvT.text(CUT_L[i], t, yt4(i, t),
-        { color: CUT_C[i], bold: true, dx: -20, dy: i % 2 ? 15 : -15, size: 13 }));
+      if (cvT.w > 520) cuts.forEach((c, i) => cvT.text(CUT_L[i], t, yt4(i, t),   // 狭い画面では凡例に任せる
+        { color: CUT_C[i], bold: true, dx: -20, dy: [-16, 18, -36][i], size: 13 }));
       cvT.textPx('今', cvT.px(t) - 12, cvT.pad.t + 10, { color: C.muted, size: 12 });
 
       /* ---------- 読み出し ---------- */
@@ -244,7 +247,7 @@ function build5(ctx) {
       cvY.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1 });
       if (S5.ghost && dt > 0) {
         cvY.clip(() => cvY.plot(x => y5(x, t + dt), { color: C.ghost, width: 2.5, dash: [7, 5] }));
-        cvY.text('Δt = ' + fmt(dt, 2) + ' s 後', 1.5, yr * 0.87, { color: C.ghost, size: 12 });
+        cvY.text('Δt = ' + fmt(dt, 2) + ' s 後', 2.6, -yr * 0.9, { color: C.ghost, size: 12 });
       }
       cvY.clip(() => cvY.plot(x => y5(x, t), { color: C.wave, width: 3 }));
       if (S5.arrows) cvY.clip(() => {

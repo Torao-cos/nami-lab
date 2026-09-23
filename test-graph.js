@@ -148,6 +148,16 @@ function check(name, ok, detail = '') {
   check('スマホ幅でも描画あり', (await inkOf(0)) > 0.005);
   await page.screenshot({ path: path.join(OUT, 'graph-yxyt-400.png'), fullPage: false });
 
+  await page.goto(U + '#velocity');
+  await page.waitForTimeout(900);
+  const ov2 = await page.evaluate(() => ({ de: document.documentElement.scrollWidth, dc: document.documentElement.clientWidth }));
+  check('幅400・velocity で横スクロールなし', ov2.de <= ov2.dc, JSON.stringify(ov2));
+  check('幅400・velocity は縦1列', await page.evaluate(() => {
+    const p = [...document.querySelectorAll('.view.show .panel')].map(e => e.getBoundingClientRect());
+    return p.every(r => r.width > window.innerWidth * 0.8);
+  }));
+  await page.screenshot({ path: path.join(OUT, 'graph-velocity-400.png'), fullPage: false });
+
   /* ---------- 10. 最終エラー確認 ---------- */
   check('全操作後もコンソールエラー0', errors.length === 0, errors.join(' | '));
 

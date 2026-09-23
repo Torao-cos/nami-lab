@@ -45,7 +45,7 @@ main{flex:1 0 auto;display:flex;flex-direction:column}
 .panel canvas{display:block;width:100%;flex:1 1 0;height:0;min-height:160px;touch-action:none;background:#020503;cursor:pointer}
 .panel .overlay{position:absolute;right:.5rem;top:.35rem;pointer-events:none;color:var(--yellow);font-weight:800;font-size:clamp(.95rem,2vw,1.2rem);text-shadow:0 0 6px #000}
 .panel .overlayTL{position:absolute;left:.5rem;top:2rem;pointer-events:none;color:var(--muted);font-size:.85rem;text-shadow:0 0 6px #000}
-.status{position:absolute;left:.6rem;top:.35rem;color:var(--yellow);font-weight:800;background:rgba(0,0,0,.5);padding:.2rem .45rem;border-radius:6px;pointer-events:none;font-size:.9rem}
+.status{position:absolute;left:.6rem;bottom:.5rem;color:var(--yellow);font-weight:800;background:rgba(0,0,0,.5);padding:.2rem .45rem;border-radius:6px;pointer-events:none;font-size:.9rem}
 
 /* 時間バー */
 .timebar{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;padding:.45rem .55rem;border:1px solid var(--line);border-radius:8px;background:#0b1510}
