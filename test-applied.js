@@ -40,9 +40,9 @@ function check(name, ok, detail = '') {
   await page.goto(U + '#huygens');
   await page.waitForTimeout(1500);
   check('#huygens に直行（タブが選択される）', await page.evaluate(() => document.querySelectorAll('nav.tabs button')[0].classList.contains('active')));
-  check('タブ5つ', await page.locator('nav.tabs button').count() === 5);
+  check('タブ6つ', await page.locator('nav.tabs button').count() === 6);
   const labels = await page.evaluate(() => [...document.querySelectorAll('nav.tabs button')].map(b => b.textContent));
-  check('タブ名が 13/14/15/16/17', JSON.stringify(labels) === JSON.stringify(['13 素元波', '14 屈折', '15 屈折の作図と全反射', '16 回折（波動タンク）', '17 干渉']), JSON.stringify(labels));
+  check('タブ名が 13/14/15/16/17/18', JSON.stringify(labels) === JSON.stringify(['13 素元波', '14 反射', '15 屈折', '16 屈折の作図と全反射', '17 回折（波動タンク）', '18 干渉']), JSON.stringify(labels));
   const fpsH = await fps();
   await shot(page, 'app-huygens-1280.png');
   check('素元波 fps', fpsH >= 30, fpsH + ' fps');
@@ -74,19 +74,124 @@ function check(name, ok, detail = '') {
   check('時間スクラブで過去へ戻れる（素元波）', scrub.after < scrub.before, JSON.stringify(scrub));
   await page.mouse.click(200, 300);
 
-  /* ---------- 2. 14 屈折（現象：隊列モデル＋二媒質タンク） ---------- */
+  /* ---------- 2. 14 反射（隊列モデル＋素元波の作図） ---------- */
   const setSlider = (label, val) => page.evaluate(([label, val]) => {
     const ctl = [...document.querySelectorAll('.view.show .controls .ctl')].find(c => c.textContent.includes(label));
     const r = ctl.querySelector('input[type=range]'); r.value = val; r.dispatchEvent(new Event('input', { bubbles: true }));
   }, [label, val]);
   const clickTimebar = label => page.evaluate(l => [...document.querySelectorAll('.view.show .timebar button')].find(b => b.textContent.includes(l)).click(), label);
+  const clickToggle = (label, root = '.controls') => page.evaluate(([l, r]) => [...document.querySelectorAll('.view.show ' + r + ' label')].find(x => x.textContent.includes(l)).querySelector('input').click(), [label, root]);
 
+  await page.goto(U + '#reflect');
+  await page.waitForTimeout(1600);
+  const fpsRL = await fps();
+  await shot(page, 'app-reflect-1280.png');
+  check('14 反射 fps', fpsRL >= 30, fpsRL + ' fps');
+  check('14 反射はパネル2枚（隊列モデル／作図）', await page.evaluate(() => {
+    const ts = [...document.querySelectorAll('.view.show .panelTitle')].map(p => p.textContent);
+    return ts.length === 2 && ts[0].includes('隊列モデル') && ts[1].includes('作図');
+  }));
+  // 隊列モデル: 壁に着いた点は「法線成分だけ」が反転する（壁に沿う成分と速さは変わらない＝反射角＝入射角）
+  const marchRL = await page.evaluate(() => {
+    const d = window.__nami_debug, g = d.reflGeom(), h = 0.002;
+    const a = g.wall * Math.PI / 180, n = { x: Math.cos(a), y: Math.sin(a) }, w = { x: -Math.sin(a), y: Math.cos(a) };
+    const vel = (m, s, t) => {
+      const p0 = d.reflPos(m, s, t), p1 = d.reflPos(m, s, t + h);
+      const vx = (p1.x - p0.x) / h, vy = (p1.y - p0.y) / h;
+      return { n: vx * n.x + vy * n.y, w: vx * w.x + vy * w.y, sp: Math.hypot(vx, vy), hit: p1.hit };
+    };
+    return { v: g.v, i: g.i, before: vel(1, 0, g.T - 0.4), after: vel(1, 0, g.T + 0.4) };
+  });
+  const angN = c => Math.atan2(Math.abs(c.w), Math.abs(c.n)) * 180 / Math.PI;
+  check('隊列モデル: 壁に着く前は速さ v・入射角 i で壁へ向かう',
+    !marchRL.before.hit && marchRL.before.n > 0 && Math.abs(marchRL.before.sp - marchRL.v) < 1e-3 && Math.abs(angN(marchRL.before) - marchRL.i) < 0.1,
+    `速さ=${marchRL.before.sp.toFixed(3)}(v=${marchRL.v}) 法線からの角=${angN(marchRL.before).toFixed(2)}°(i=${marchRL.i}°)`);
+  check('隊列モデル: 壁に着いた点は法線成分だけが反転（壁に沿う成分と速さは不変）',
+    marchRL.after.hit && Math.abs(marchRL.after.n + marchRL.before.n) < 1e-3 && Math.abs(marchRL.after.w - marchRL.before.w) < 1e-3 && Math.abs(marchRL.after.sp - marchRL.v) < 1e-3,
+    `法線成分 ${marchRL.before.n.toFixed(3)} → ${marchRL.after.n.toFixed(3)}／壁に沿う成分 ${marchRL.before.w.toFixed(3)} → ${marchRL.after.w.toFixed(3)}`);
+  check('隊列モデル: 反射後の向きが法線について入射と対称（反射角＝入射角）',
+    Math.abs(angN(marchRL.after) - angN(marchRL.before)) < 0.05,
+    `${angN(marchRL.before).toFixed(2)}° → ${angN(marchRL.after).toFixed(2)}°`);
+  // 作図（素元波の包絡線）: BB′ = v·Δt = AA″ ・ 包絡線は全ての素元波に接する ・ そこから出る r は i に等しい
+  for (const [i, wall] of [[40, 0], [65, 0], [25, 30], [55, -20]]) {
+    await setSlider('入射角', i); await setSlider('壁の角度', wall);
+    await page.waitForTimeout(220);
+    const d = await page.evaluate(() => window.__nami_debug.reflDraft());
+    check(`作図: BB′ = v·Δt = AA″（i=${i}°, 壁 ${wall}°）`, Math.abs(d.BBp - d.AAp) < 1e-9 && Math.abs(d.BBp - d.v * d.dt) < 1e-9,
+      `BB′=${d.BBp.toFixed(4)} AA″=${d.AAp.toFixed(4)} vΔt=${(d.v * d.dt).toFixed(4)}`);
+    check(`作図: 包絡線が壁上の各点の素元波に接する（i=${i}°, 壁 ${wall}°）`, d.maxTangentErr < 1e-9, '最大のずれ ' + d.maxTangentErr.toExponential(1) + ' m');
+    check(`作図: 包絡線から求めた反射角 = 入射角（i=${i}°, 壁 ${wall}°）`, Math.abs(d.r - d.i) < 1e-6, `i=${d.i}° r=${d.r.toFixed(6)}°`);
+    check(`作図: BB′ = AB′ sin i（i=${i}°, 壁 ${wall}°）`, Math.abs(d.BBp - d.ABp * Math.sin(i * Math.PI / 180)) < 1e-9,
+      `BB′=${d.BBp.toFixed(4)} AB′sin i=${(d.ABp * Math.sin(i * Math.PI / 180)).toFixed(4)}`);
+  }
+  await setSlider('入射角', 40); await setSlider('壁の角度', 0);
+  await page.waitForTimeout(250);
+  const rlText = await page.evaluate(() => document.querySelector('.view.show .formula').textContent);
+  check("14 反射の読み出しに BB′ = v·Δt = AA″ と i = r が現在値で出る",
+    /BB′ = v·Δt/.test(rlText) && /AA″/.test(rlText) && /i = r = 40.0°/.test(rlText) && /合同/.test(rlText), rlText.slice(0, 120));
+  check('14 反射（作図）は時間スクラブで過去へ戻れる', await page.evaluate(async () => {
+    const bar = document.querySelector('.view.show .timebar');
+    [...bar.querySelectorAll('button')].find(b => b.textContent.includes('停止')).click();
+    await new Promise(r => setTimeout(r, 120));
+    const r = bar.querySelector('input[type=range]'), before = parseFloat(r.value);
+    r.value = 0.4; r.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r2 => setTimeout(r2, 150));
+    const after = parseFloat(document.querySelector('.view.show .tval').textContent.replace(/[^\d.]/g, ''));
+    [...bar.querySelectorAll('button')].find(b => b.textContent.includes('再開')).click();
+    return before > 1 && after < 1;
+  }));
+  // 入射角の自動スイープ
+  await clickToggle('自動で動かす');
+  const sweepRL = await page.evaluate(async () => {
+    const val = () => parseFloat([...document.querySelectorAll('.view.show .controls .ctl')].find(c => c.textContent.includes('入射角')).querySelector('input[type=range]').value);
+    const seen = new Set();
+    for (let k = 0; k < 24; k++) { await new Promise(r => setTimeout(r, 120)); seen.add(val()); }
+    return { n: seen.size, max: Math.max(...seen), min: Math.min(...seen) };
+  });
+  check('14 反射: 入射角の自動スイープで i が連続に変わる', sweepRL.n >= 8 && sweepRL.max - sweepRL.min >= 10, JSON.stringify(sweepRL));
+  await clickToggle('自動で動かす');
+  await setSlider('入射角', 40);
+  // 「詳しく」→ 壁つき波動タンク（切替中は ◀ と時間バーが無効）
+  await clickTimebar('詳しく');
+  await clickToggle('波動タンク', '.controls.detail');
+  await page.waitForTimeout(5000);
+  const tankRL = await page.evaluate(() => window.__nami_debug.reflTank());
+  await shot(page, 'app-reflect-tank-1280.png');
+  check('14 反射: 詳しくで右が壁つき波動タンクになり、波が立つ', tankRL.on && tankRL.step > 100 && tankRL.e > 0.05,
+    `格子 ${tankRL.nx}×${tankRL.ny} λ=${tankRL.lam} セル ${tankRL.step} steps rms=${tankRL.e.toFixed(3)}`);
+  check('14 反射: タンク表示中は ◀ と時間バーが無効', await page.evaluate(() => {
+    const b = [...document.querySelectorAll('.view.show .timebar button')].find(x => x.textContent === '◀');
+    const r = document.querySelector('.view.show .timebar input[type=range]');
+    return b.disabled && r.disabled;
+  }));
+  check('14 反射: タンク表示中は ← キーでも t が戻らない', await page.evaluate(async () => {
+    [...document.querySelectorAll('.view.show .timebar button')].find(b => b.textContent.includes('停止')).click();
+    await new Promise(r => setTimeout(r, 200));
+    const tv = document.querySelector('.view.show .tval');
+    const before = parseFloat(tv.textContent.replace(/[^\d.]/g, ''));
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowLeft', bubbles: true }));
+    await new Promise(r => setTimeout(r, 200));
+    const after = parseFloat(tv.textContent.replace(/[^\d.]/g, ''));
+    [...document.querySelectorAll('.view.show .timebar button')].find(b => b.textContent.includes('再開')).click();
+    return Math.abs(after - before) < 1e-6;
+  }));
+  await clickToggle('波動タンク', '.controls.detail');
+  await page.waitForTimeout(300);
+  check('14 反射: 作図に戻すと ◀ と時間バーが戻る', await page.evaluate(() => {
+    const b = [...document.querySelectorAll('.view.show .timebar button')].find(x => x.textContent === '◀');
+    return !b.disabled && !document.querySelector('.view.show .timebar input[type=range]').disabled;
+  }));
+  await clickTimebar('詳しく');
+  await page.waitForTimeout(200);
+  await shot(page, 'app-reflect-1280.png');
+
+  /* ---------- 3. 15 屈折（左＝隊列モデル／右＝二媒質の波動タンク） ---------- */
   await page.goto(U + '#refract');
-  await page.waitForTimeout(6000);
+  await page.waitForTimeout(9000);
   const fpsR = await fps();
   await shot(page, 'app-refract-1280.png');
-  check('14 屈折 fps', fpsR >= 30, fpsR + ' fps');
-  check('14 屈折はパネル2枚（隊列モデル／波動タンク）',
+  check('15 屈折 fps', fpsR >= 30, fpsR + ' fps');
+  check('15 屈折はパネル2枚（隊列モデル／波動タンク）',
     await page.evaluate(() => {
       const ts = [...document.querySelectorAll('.view.show .panelTitle')].map(p => p.textContent);
       return ts.length === 2 && ts[0].includes('隊列モデル') && ts[1].includes('波動タンク');
@@ -117,11 +222,31 @@ function check(name, ok, detail = '') {
   const tank1 = await page.evaluate(() => window.__nami_debug.probeRF());
   check('波動タンク: 屈折波が媒質2に届く', tank1.med2 > 0.25 * tank1.med1,
     `med1=${tank1.med1.toFixed(3)} med2=${tank1.med2.toFixed(3)} (格子 ${tank1.nx}×${tank1.ny})`);
-  check('14 屈折タブの ◀ は無効',
+  // 左（隊列モデル）と右（タンク）の同調: λ の比・画面の横幅・境界に沿う見かけの波長（＝屈折角）
+  const sync = await page.evaluate(() => window.__nami_debug.refractSync());
+  check('15 屈折: タンクの λ₁:λ₂（セル）＝ 隊列モデルの λ₁:λ₂（m）＝ v₁:v₂',
+    Math.abs(sync.lam1cell / sync.lam2cell - sync.lam1m / sync.lam2m) < 1e-9 && Math.abs(sync.lam1cell / sync.lam2cell - 1.5) < 1e-9,
+    `λ₁=${sync.lam1m} m=${sync.lam1cell.toFixed(1)} セル／λ₂=${sync.lam2m} m=${sync.lam2cell.toFixed(1)} セル（1 m = ${sync.N.toFixed(1)} セル）`);
+  check('15 屈折: タンクは遅い側の λ も 20 セル以上（数値分散を抑える）',
+    Math.min(sync.lam1cell, sync.lam2cell) >= 20, `min λ = ${Math.min(sync.lam1cell, sync.lam2cell).toFixed(1)} セル`);
+  check('15 屈折: 左の隊列モデルと右のタンクが同じ横幅［m］',
+    Math.abs(sync.halfW - sync.nx / (2 * sync.N)) < 1e-9, `横半幅 ${sync.halfW.toFixed(2)} m ＝ ${sync.nx} セル ÷ ${sync.N.toFixed(1)} ÷ 2`);
+  check('15 屈折: 波源の周期 ' + sync.Tst + ' ステップ ＝ 隊列モデルの T（λ₁ = c₁·Tst セル）',
+    Math.abs(0.5 * sync.lam1m / Math.max(sync.lam1m, sync.lam2m) * sync.Tst - sync.lam1cell) < 0.6,
+    `c₁·Tst = ${(0.5 * sync.lam1m / Math.max(sync.lam1m, sync.lam2m) * sync.Tst).toFixed(1)} セル vs λ₁ = ${sync.lam1cell.toFixed(1)} セル`);
+  check('15 屈折: タンクの「境界に沿う見かけの波長」が媒質1と媒質2で一致（＝屈折の法則が場でも成り立つ）',
+    Math.abs(sync.lamX1 - sync.lamX2) / sync.lamX1 < 0.08, `媒質1 ${sync.lamX1.toFixed(1)} セル／媒質2 ${sync.lamX2.toFixed(1)} セル`);
+  check('15 屈折: その見かけの波長が λ₁/sin i（左右で同じ入射角）',
+    Math.abs(sync.lamX1 - sync.lam1cell / Math.sin(sync.i * Math.PI / 180)) / sync.lamX1 < 0.08,
+    `実測 ${sync.lamX1.toFixed(1)} セル vs λ₁/sin i = ${(sync.lam1cell / Math.sin(sync.i * Math.PI / 180)).toFixed(1)} セル`);
+  const rTank = Math.asin(Math.min(1, sync.lam2cell / sync.lamX2)) * 180 / Math.PI;
+  check('15 屈折: タンクの場から逆算した屈折角が隊列モデルの r と一致',
+    Math.abs(rTank - sync.r) < 2.5, `タンク ${rTank.toFixed(1)}° vs 隊列モデル ${sync.r.toFixed(1)}°`);
+  check('15 屈折タブの ◀ は無効',
     await page.evaluate(() => [...document.querySelectorAll('.view.show .timebar button')].find(x => x.textContent === '◀').disabled));
-  check('14 屈折タブは時間スクラブなし', await page.evaluate(() => document.querySelector('.view.show .timebar input[type=range]') === null));
+  check('15 屈折タブは時間スクラブなし', await page.evaluate(() => document.querySelector('.view.show .timebar input[type=range]') === null));
   const rfText = await page.evaluate(() => document.querySelector('.view.show .formula').textContent);
-  check('14 屈折の読み出しに v₁・v₂・λ₁=v₁T・λ₂=v₂T・i・r が出る',
+  check('15 屈折の読み出しに v₁・v₂・λ₁=v₁T・λ₂=v₂T・i・r が出る',
     /λ₁ = v₁T/.test(rfText) && /λ₂ = v₂T/.test(rfText) && /sin r = \(v₂\/v₁\) sin i/.test(rfText) && /r = /.test(rfText), rfText.slice(0, 150));
   // 全反射条件（v₂ > v₁ かつ大きい入射角）では媒質2にほとんど届かない
   await setSlider('媒質1の速さ', 0.5); await setSlider('媒質2の速さ', 2.0); await setSlider('入射角', 75);
@@ -132,18 +257,18 @@ function check(name, ok, detail = '') {
   check('波動タンク: 全反射条件では媒質2にほとんど届かない', tank2.med2 < 0.12 * tank2.med1,
     `med1=${tank2.med1.toFixed(3)} med2=${tank2.med2.toFixed(3)} 比=${(tank2.med2 / tank2.med1).toFixed(3)}`);
   const rfText2 = await page.evaluate(() => document.querySelector('.view.show .formula').textContent);
-  check('14 屈折: 全反射条件の読み出しは「屈折波なし」', rfText2.includes('屈折波なし'), rfText2.slice(0, 140));
+  check('15 屈折: 全反射条件の読み出しは「屈折波なし」', rfText2.includes('屈折波なし'), rfText2.slice(0, 140));
   await setSlider('媒質1の速さ', 1.5); await setSlider('媒質2の速さ', 1.0); await setSlider('入射角', 50);
   await clickTimebar('リセット');
   await page.waitForTimeout(5500);
   await shot(page, 'app-refract-1280.png');
 
-  /* ---------- 2b. 15 屈折の作図と全反射 ---------- */
+  /* ---------- 4. 16 屈折の作図と全反射 ---------- */
   await page.goto(U + '#refract2');
   await page.waitForTimeout(1200);
   const fpsR2 = await fps();
   await shot(page, 'app-refract2-1280.png');
-  check('15 屈折の作図 fps', fpsR2 >= 30, fpsR2 + ' fps');
+  check('16 屈折の作図 fps', fpsR2 >= 30, fpsR2 + ' fps');
   const readNums = () => page.evaluate(() => [...document.querySelectorAll('.view.show .formula b')].slice(0, 3).map(b => parseFloat(b.textContent)));
   for (const [v1, v2, i] of [[1.5, 1.0, 50], [1.0, 2.0, 20], [0.8, 0.6, 70]]) {
     await setSlider('媒質1の速さ', v1); await setSlider('媒質2の速さ', v2); await setSlider('入射角', i);
@@ -196,7 +321,7 @@ function check(name, ok, detail = '') {
   await page.waitForTimeout(400);
   await shot(page, 'app-refract2-1280.png');
 
-  /* ---------- 3. 回折 ---------- */
+  /* ---------- 5. 17 回折 ---------- */
   await page.goto(U + '#diffract');
   await page.waitForTimeout(5000);
   const fpsD = await fps();
@@ -273,7 +398,7 @@ function check(name, ok, detail = '') {
   await page.selectOption('.view.show .controls select', 'single');
   await setSlider('スリット幅', 24); await setSlider('波源の周期', 24);
 
-  /* ---------- 4. 干渉 ---------- */
+  /* ---------- 6. 18 干渉 ---------- */
   await page.goto(U + '#interfere');
   await page.waitForTimeout(1500);
   const fpsI = await fps();
@@ -333,7 +458,7 @@ function check(name, ok, detail = '') {
   await page.evaluate(() => { const d = window.__nami_debug; d.P.x = 2.4; d.P.y = 1.6; });
   await page.waitForTimeout(400);
 
-  /* ---------- 5. スマホ幅 ---------- */
+  /* ---------- 7. スマホ幅 ---------- */
   const page2 = await ctx.newPage();
   const errors2 = [];
   page2.on('pageerror', e => errors2.push('pageerror: ' + e.message));
@@ -346,7 +471,7 @@ function check(name, ok, detail = '') {
   check('幅400pxで横スクロールなし', !hscroll);
   const fpsM = await page2.evaluate(() => window.__nami_debug.fps);
   check('スマホ幅 回折 fps ≥ 30', fpsM >= 30, fpsM + ' fps');
-  for (const id of ['huygens', 'refract', 'refract2', 'interfere']) {
+  for (const id of ['huygens', 'reflect', 'refract', 'refract2', 'interfere']) {
     await page2.goto(U + '#' + id);
     await page2.waitForTimeout(900);
     await shot(page2, 'app-' + id + '-400.png');
@@ -354,7 +479,7 @@ function check(name, ok, detail = '') {
   check('スマホ幅でもエラーなし', errors2.length === 0, errors2.join(' | '));
 
   check('全操作後もコンソールエラー0', errors.length === 0, errors.join(' | '));
-  console.log('\nfps: huygens=' + fpsH + ' refract=' + fpsR + ' diffract=' + fpsD + ' interfere=' + fpsI + ' mobile-diffract=' + fpsM);
+  console.log('\nfps: huygens=' + fpsH + ' reflect=' + fpsRL + ' refract=' + fpsR + ' diffract=' + fpsD + ' interfere=' + fpsI + ' mobile-diffract=' + fpsM);
 
   await browser.close();
   server.close();

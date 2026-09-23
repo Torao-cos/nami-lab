@@ -10,10 +10,9 @@
   .timebar button[disabled]{opacity:.38;cursor:not-allowed}
   /* 干渉タブ: 上面図（広）＋ 点Pの y-t（細） */
   .stage.stageIF{grid-template-columns:2fr 1fr}
-  /* 14 屈折タブ: 上下2段（隊列モデル／波動タンク） */
-  .stage.stageRF{grid-template-columns:1fr;grid-auto-rows:1fr}
-  .stage.stageRF .panel{min-height:215px}
-  @media (max-width:760px){ .panel{min-height:300px} .stage.stageIF{grid-template-columns:1fr} .stage.stageRF .panel{min-height:230px} }
+  /* 14 反射タブ: 現象（広）＋ 作図（壁に沿って縦長なので細くてよい） */
+  .stage.stageRL{grid-template-columns:1.35fr 1fr}
+  @media (max-width:760px){ .panel{min-height:300px} .stage.stageIF,.stage.stageRL{grid-template-columns:1fr} }
 </style>
 </head><body>
 <script src="common.js"></script>
@@ -187,32 +186,522 @@ function buildHuygens(ctx) {
 }
 
 /* =========================================================
-   E-14 屈折（現象）— 隊列モデル ＋ 二媒質の波動タンク
+   2次元 波動タンク（FDTD）共通部 — 14 反射・15 屈折で使う
+   格子座標: x は右向き・y は下向き（画像と同じ）。u は変位。
+   cfg: media(cA,nx,ny) … クーラン数（セル/ステップ）を書く／wall(wall,nx,ny) … 変位0のセルに1
+        inject(un,nx,ny,phase,amp,wall) … 波源（毎ステップ un に書き込む。phase は回転数）
+        Tst()→波源の周期[ステップ]／rate()→1秒あたりのステップ数／gain()→明るさ
+   ========================================================= */
+function createTank(cv, cfg) {
+  const BUDGET = cfg.budget || 26000, MAXX = cfg.maxX || 250, MAXY = cfg.maxY || 190;
+  let nx = 0, ny = 0, u = null, up, un, cA, sig, wall, off, offg, img;
+  let step = 0, acc = 0, phase = 0, warmTo = 0, lvl = 0, absL = 15;
+
+  function alloc(_nx, _ny) {
+    nx = _nx; ny = _ny; const n = nx * ny;
+    u = new Float32Array(n); up = new Float32Array(n); un = new Float32Array(n);
+    cA = new Float32Array(n); sig = new Float32Array(n);
+    wall = new Uint8Array(n);
+    off = document.createElement('canvas'); off.width = nx; off.height = ny;
+    offg = off.getContext('2d'); img = offg.createImageData(nx, ny);
+    const dd = img.data; for (let k = 0; k < n; k++) dd[4 * k + 3] = 255;
+    step = 0; acc = 0; phase = 0;
+    rebuild(); setWarm();
+  }
+  // 起動・リセット直後だけ早送りして画面を波で満たす（周期の整数倍だけ進めるので位相はずれない）
+  function setWarm() { warmTo = cfg.warmSteps ? step + Math.ceil(Math.min(4000, cfg.warmSteps()) / Math.max(6, cfg.Tst())) * Math.max(6, cfg.Tst()) : 0; }
+  function rebuild() {
+    if (!cA) return;
+    // 吸収層（端で反射させない）。厚みは λ に合わせる（長い波は薄い層では吸えない）
+    const L = absL = clamp(Math.round(cfg.absorb ? cfg.absorb(nx, ny) : 15), 12, Math.round(Math.min(nx, ny) * 0.22));
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const dist = Math.min(i, j, nx - 1 - i, ny - 1 - j);
+      sig[j * nx + i] = dist >= L ? 0 : 0.14 * Math.pow((L - dist) / L, 2);
+    }
+    cA.fill(0.5); if (cfg.media) cfg.media(cA, nx, ny);
+    wall.fill(0); if (cfg.wall) cfg.wall(wall, nx, ny);
+    for (let k = 0, n = nx * ny; k < n; k++) if (wall[k]) { u[k] = 0; up[k] = 0; un[k] = 0; }
+  }
+  function clearField() { if (u) { u.fill(0); up.fill(0); un.fill(0); } step = 0; acc = 0; phase = 0; lvl = 0; setWarm(); }
+  function inject(Tst) { cfg.inject(un, nx, ny, phase, Math.min(1, step / (2 * Tst)), wall, absL + 4); }
+  function advance(n) {
+    if (!u) return;
+    const Tst = Math.max(6, cfg.Tst());
+    // 弱い減衰（1波長進むごとに約 LOSS の割合で弱まる）。波源の線は戻ってきた波を跳ね返すので、
+    // 全反射のように波が閉じ込められる条件で振幅が無限に育つのを防ぐ。格子や速さによらない量にしてある。
+    const loss = (cfg.loss == null ? 0.05 : cfg.loss) / Tst;
+    for (let s = 0; s < n; s++) {
+      for (let j = 1; j < ny - 1; j++) {
+        const row = j * nx;
+        for (let i = 1; i < nx - 1; i++) {
+          const k = row + i;
+          if (wall[k]) { un[k] = 0; continue; }
+          const c = cA[k];
+          const lap = u[k + 1] + u[k - 1] + u[k + nx] + u[k - nx] - 4 * u[k];
+          const sg = sig[k] * (c * 2) + loss;
+          un[k] = (2 * u[k] - (1 - sg) * up[k] + c * c * lap) / (1 + sg);
+        }
+      }
+      for (let i = 0; i < nx; i++) { un[i] = 0; un[(ny - 1) * nx + i] = 0; }
+      for (let j = 0; j < ny; j++) { un[j * nx] = 0; un[j * nx + nx - 1] = 0; }
+      phase += 1 / Tst;
+      inject(Tst);
+      const tmp = up; up = u; u = un; un = tmp;
+      step++;
+    }
+  }
+  function render() {
+    // 明るさは画面の実効振幅（rms）で自動調整する（全反射などで振幅が大きく変わっても見え方を保つ）。
+    let s2 = 0, c2 = 0;
+    for (let j = 16; j < ny - 16; j += 2) { const row = j * nx; for (let i = 16; i < nx - 16; i += 2) { const v = u[row + i]; s2 += v * v; c2++; } }
+    const rms = Math.sqrt(s2 / Math.max(1, c2));
+    lvl = lvl > 0 ? lvl * 0.93 + rms * 0.07 : Math.max(rms, 1e-3);
+    const d = img.data, gg = cfg.gain() * 1.7 / Math.max(lvl, 1e-3);
+    for (let k = 0, n = nx * ny; k < n; k++) {
+      const o = 4 * k;
+      if (wall[k]) { d[o] = 124; d[o + 1] = 134; d[o + 2] = 128; continue; }
+      let v = u[k] * gg; if (v > 1) v = 1; else if (v < -1) v = -1;
+      const m = v * v;   // 弱いところは暗く（全反射で媒質2がぼんやり光るのを防ぐ）
+      if (v >= 0) { d[o] = 84 * m; d[o + 1] = 255 * m; d[o + 2] = 138 * m; }
+      else { d[o] = 60 * m; d[o + 1] = 130 * m; d[o + 2] = 255 * m; }
+    }
+    offg.putImageData(img, 0, 0);
+  }
+  function draw(dt, running) {
+    cv.setPad({ l: 8, r: 8, t: 8, b: 8 });
+    const aspect = cv.iw / Math.max(1, cv.ih);
+    const wantX = clamp(Math.round(Math.sqrt(BUDGET * aspect)), 90, MAXX);
+    const wantY = clamp(Math.round(BUDGET / wantX), 70, MAXY);
+    if (Math.abs(wantX - nx) > 4 || Math.abs(wantY - ny) > 4) alloc(wantX, wantY);
+    if (running && step < warmTo) advance(Math.min(16, warmTo - step));
+    else if (running && dt > 0) { acc += dt * cfg.rate(); let n = Math.floor(acc); acc -= n; if (n > 24) n = 24; if (n > 0) advance(n); }
+    cv.clear(); render();
+    const g = cv.ctx; g.save(); g.imageSmoothingEnabled = true;
+    g.drawImage(off, cv.pad.l, cv.pad.t, cv.iw, cv.ih); g.restore();
+  }
+  /* 検証用 */
+  function lamRow(j, i0, i1) {   // 行 j の [i0,i1) で零交差の間隔から λ（セル）を測る
+    if (!u) return NaN;
+    const xs = []; let prev = u[(j | 0) * nx + (i0 | 0)];
+    for (let i = (i0 | 0) + 1; i < (i1 | 0); i++) {
+      const v = u[(j | 0) * nx + i];
+      if (prev !== 0 && v !== 0 && ((prev < 0) !== (v < 0))) xs.push(i - 1 + Math.abs(prev) / (Math.abs(prev) + Math.abs(v)));
+      prev = v;
+    }
+    return xs.length >= 3 ? 2 * (xs[xs.length - 1] - xs[0]) / (xs.length - 1) : NaN;
+  }
+  function rms(i0, i1, j0, j1) {
+    if (!u) return 0;
+    let s = 0, c = 0;
+    for (let j = j0 | 0; j < (j1 | 0); j++) for (let i = i0 | 0; i < (i1 | 0); i++) { const v = u[j * nx + i]; s += v * v; c++; }
+    return Math.sqrt(s / Math.max(1, c));
+  }
+  return {
+    draw, rebuild, advance, lamRow, rms, clear: clearField, warm: setWarm,
+    get nx() { return nx; }, get ny() { return ny; }, get step() { return step; }
+  };
+}
+
+/* 斜めの平面波の波源: 波が入ってくる側の1辺（列または行）に、位置に比例してずらした位相を書き込む。
+   辺いっぱいに書くので、波面が画面の端から端まで届く平面波になる。(dgx,dgy)＝進む向き（格子座標・単位）。 */
+function injectEdgePlane(un, nx, ny, phase, amp, dgx, dgy, lamCells, wall, margin, edge) {
+  const m = margin || 16, lam = Math.max(4, lamCells);
+  if (edge === 'col' || (edge !== 'row' && Math.abs(dgx) >= Math.abs(dgy))) {
+    const x = dgx > 0 ? m : nx - 1 - m;
+    for (let y = 1; y < ny - 1; y++) { const k = y * nx + x; if (!wall[k]) un[k] = amp * sinT(phase - y * dgy / lam); }
+  } else {
+    const y = dgy > 0 ? m : ny - 1 - m;
+    for (let x = 1; x < nx - 1; x++) { const k = y * nx + x; if (!wall[k]) un[k] = amp * sinT(phase - x * dgx / lam); }
+  }
+}
+
+// 凸多角形を半平面 n·p ≥ c で切る（壁の向こう側を塗るのに使う）
+function clipPoly(pts, nx, ny, c) {
+  const out = [];
+  for (let k = 0; k < pts.length; k++) {
+    const a = pts[k], b = pts[(k + 1) % pts.length];
+    const fa = nx * a[0] + ny * a[1] - c, fb = nx * b[0] + ny * b[1] - c;
+    if (fa >= 0) out.push(a);
+    if ((fa >= 0) !== (fb >= 0)) { const s = fa / (fa - fb); out.push([a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s]); }
+  }
+  return out;
+}
+
+/* =========================================================
+   E-14 反射 — 左＝隊列モデル（現象）／右＝素元波の作図（i = r）
+   壁座標系: p＝壁の法線方向（p ＜ 0 が媒質側）、q＝壁に沿う方向
+   ========================================================= */
+function buildReflect(ctx) {
+  ctx.layout('2'); ctx.stage.classList.add('stageRL');
+  const T_DRAFT = '作図（素元波）— 壁上の各点から出た素元波の包絡線が反射波面';
+  const T_TANK = '壁つき波動タンク（数値計算）— 壁は変位 0。反射が現象として出る';
+  const cvA = ctx.canvas({ title: '隊列モデル — 波面＝横一列の点の列。壁に着いた点から順に、法線方向の速度成分が反転する' });
+  const cvB = ctx.canvas({ title: T_DRAFT });
+  const st = { i: 40, wall: 0, lam: 2, T: 2, dots: true, ray: true, wavelet: true, env: true, len: true, sweep: false, tank: false, gain: 1 };
+  const SWEEP_MAX = 85, SWEEP_P = 16, TST = 40;   // タンク: λ = 0.5 × 40 = 20 セル
+
+  const sI = ui.slider(ctx.controls, {
+    label: '入射角 i', min: 0, max: SWEEP_MAX, step: 1, value: 40, digits: 0, unit: '°',
+    onInput: v => { st.i = v; if (st.sweep) { st.sweep = false; tSweep.set(false, true); } reTank(); }
+  });
+  const sW = ui.slider(ctx.controls, {
+    label: '壁の角度', min: -40, max: 40, step: 1, value: 0,
+    fmt: x => (Math.abs(x) < 0.5 ? '垂直' : (x > 0 ? '+' : '') + fmt(x, 0) + '°'),
+    onInput: v => { st.wall = v; reTank(); }
+  });
+  const tSweep = ui.toggle(ctx.controls, { label: '入射角を自動で動かす（0°→85°→0°）', checked: false, onChange: v => st.sweep = v });
+  ui.sep(ctx.controls);
+  ui.toggle(ctx.controls, { label: '波面上の点（隊列）', checked: true, onChange: v => st.dots = v });
+  ui.toggle(ctx.controls, { label: '射線・法線・角', checked: true, onChange: v => st.ray = v });
+  ui.toggle(ctx.controls, { label: '素元波（右の作図）', checked: true, onChange: v => st.wavelet = v });
+  ui.toggle(ctx.controls, { label: '包絡線（反射波面）', checked: true, onChange: v => st.env = v });
+  ui.toggle(ctx.controls, { label: "作図の長さ BB′・AA″", checked: true, onChange: v => st.len = v });
+  ui.sep(ctx.controls);
+  ui.slider(ctx.controls, { label: 'λ', min: 0.6, max: 3, step: 0.1, value: 2, unit: 'm', digits: 1, onInput: v => st.lam = v });
+  ui.slider(ctx.controls, { label: 'T', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
+  ui.legend(ctx.controls, [[C.wave1, '青＝入射波面'], [C.wave2, '赤＝反射波面']]);
+  const F = ui.formula(ctx.controls, '');
+  note(ctx.controls, '左＝現象。<b>壁に先に着いた点から順に、壁に垂直な向きの速度成分だけが反転する</b>（壁に沿う向きの成分はそのまま）。先に着いた点から折り返すので、列全体が向きを変えて反射波面になる。／右＝作図。<b>壁上の各点から出る素元波の半径は、その点に波面が着いてからの経過時間 × v</b> なので点ごとに違う（A のものがいちばん大きく、B′ のものは 0）。その包絡線が反射波面。');
+  ui.slider(ctx.detail, { label: 'タンクの明るさ', min: 0.3, max: 3, step: 0.1, value: 1, digits: 1, onInput: v => st.gain = v });
+  note(ctx.detail, '壁の角度はスライダーのほか、<b>壁の上の黄色い点のドラッグ</b>でも変えられる。');
+  const tTank = ui.toggle(ctx.detail, { label: '右の画面を「壁つき波動タンク（数値計算）」にする', checked: false, onChange: setTankMode });
+  note(ctx.detail, '隊列モデルは作図ではなく<b>追跡</b>：壁を q で横切るレイごとに「その点が壁に着く時刻」を出し、それ以前は速さ v・向き d、それ以後は法線成分だけを反転した向き d′ で位置を計算している。だから <b>i = r は結果であって、覚える規則ではない</b>。');
+  note(ctx.detail, 'タンクは2次元波動方程式を差分法で解いたもの（壁＝変位 0 の固い面）。λ が 20 セルになるように 1 m の長さを決めている。<b>タンク表示中は時間を戻せない</b>（場を1ステップずつ積み上げるため。◀ と時間バーは無効）。');
+
+  const reTank = () => { tank.rebuild(); if (st.tank) tank.warm(); };
+
+  /* ---------- 幾何 ---------- */
+  function geo() {
+    const a = st.wall * D2R, i = st.i * D2R;
+    return {
+      a, i, si: Math.sin(i), ci: Math.cos(i),
+      n: { x: Math.cos(a), y: Math.sin(a) }, w: { x: -Math.sin(a), y: Math.cos(a) },
+      v: st.lam / st.T, lam: st.lam, T: st.T
+    };
+  }
+  const toW = (g, p, q) => ({ x: p * g.n.x + q * g.w.x, y: p * g.n.y + q * g.w.y });
+  const dirs = g => ({
+    d: toW(g, g.ci, g.si), d2: toW(g, -g.ci, g.si),      // 進む向き（入射／反射）
+    u: toW(g, -g.si, g.ci), u2: toW(g, g.si, g.ci)       // 波面の向き（入射／反射）
+  });
+
+  // 壁の角度ハンドル（左の画面）
+  cvA.addHandle({
+    get: () => { const g = geo(); return toW(g, 0, hLen()); },
+    set: (x, y) => { const a = clamp(Math.atan2(-x, y) * R2D, -40, 40); st.wall = a; sW.set(a, true); reTank(); },
+    color: C.yellow, r: 24, size: 8
+  });
+  let hLenV = 1.5;
+  function hLen() { return hLenV; }
+
+  /* ---------- 左：隊列モデル ---------- */
+  function drawMarch(t) {
+    cvA.clear(); cvA.setPad({ l: 10, r: 10, t: 10, b: 22 });
+    const g = geo(), D = dirs(g);
+    const halfW = clamp(3.4 * g.lam, 2.4, 14);
+    cvA.setViewIso(-0.56 * halfW, 0, halfW);
+    const V = cvA.view, rect = { x0: V.x0, x1: V.x1, y0: V.y0, y1: V.y1 };
+    hLenV = Math.min(V.y1 * 0.62, halfW * 0.55);
+    cvA.axes({ grid: true, xStep: 1, yStep: 1, xAxis: false, yAxis: false, xTicks: false, yTicks: false });
+    const corners = [[V.x0, V.y0], [V.x1, V.y0], [V.x1, V.y1], [V.x0, V.y1]];
+    // 壁の向こう側
+    const poly = clipPoly(corners, g.n.x, g.n.y, 0);
+    if (poly.length >= 3) cvA.plotPts(poly, { close: true, fill: 'rgba(143,214,176,0.12)', color: 'none' });
+    let qLo = 1e9, qHi = -1e9;
+    corners.forEach(c => { const q = c[0] * g.w.x + c[1] * g.w.y; if (q < qLo) qLo = q; if (q > qHi) qHi = q; });
+    const diag = Math.hypot(V.x1 - V.x0, V.y1 - V.y0);
+    const sp = (V.x1 - V.x0) / 17;
+    const oI = { color: C.wave1, width: 2.6 }, oR = { color: C.wave2, width: 2.6 };
+
+    function arm(K, dir, nrm, sign, o, color, sStar) {
+      const seg = clipLine(nrm.x, nrm.y, nrm.x * K.x + nrm.y * K.y, rect);
+      if (!seg) return;
+      let a = (seg[0][0] - K.x) * dir.x + (seg[0][1] - K.y) * dir.y;
+      let b = (seg[1][0] - K.x) * dir.x + (seg[1][1] - K.y) * dir.y;
+      if (a > b) { const c = a; a = b; b = c; }
+      if (sign > 0) a = Math.max(a, 0); else b = Math.min(b, 0);
+      if (b <= a) return;
+      cvA.line(K.x + dir.x * a, K.y + dir.y * a, K.x + dir.x * b, K.y + dir.y * b, o);
+      if (!st.dots) return;
+      let j0 = Math.ceil((sStar + a) / sp), j1 = Math.floor((sStar + b) / sp);
+      if (j1 - j0 > 40) j1 = j0 + 40;
+      for (let j = j0; j <= j1; j++) { const s = j * sp - sStar; cvA.dot(K.x + dir.x * s, K.y + dir.y * s, 3.2, { color }); }
+    }
+
+    cvA.clip(() => {
+      if (g.si < 5e-3) {
+        // 垂直入射：どの点も同時に壁に着くので、列は曲がらずそのまま折り返す
+        const base = t / g.T;
+        for (let m = Math.ceil(base - diag / g.lam) - 1; m <= base + diag / g.lam + 1; m++) {
+          const L = g.v * (t - m * g.T); if (Math.abs(L) > diag) continue;
+          const p = -Math.abs(L), K = toW(g, p, 0);
+          arm(K, D.u, D.d, 1, L < 0 ? oI : oR, L < 0 ? C.wave1 : C.wave2, 0);
+          arm(K, D.u, D.d, -1, L < 0 ? oI : oR, L < 0 ? C.wave1 : C.wave2, 0);
+        }
+      } else {
+        const tanI = g.si / g.ci;
+        const lMin = Math.min(qLo * g.si, 0) - diag, lMax = Math.max(qHi * g.si, 0) + diag;
+        let m0 = Math.ceil(t / g.T - lMax / g.lam), m1 = Math.floor(t / g.T - lMin / g.lam);
+        if (m1 - m0 > 44) m1 = m0 + 44;
+        for (let m = m0; m <= m1; m++) {
+          const L = g.v * (t - m * g.T);            // 原点から波面までの進み（負＝まだ手前）
+          const K = toW(g, 0, L / g.si), sStar = L / tanI;
+          arm(K, D.u, D.d, 1, oI, C.wave1, sStar);
+          arm(K, D.u2, D.d2, -1, oR, C.wave2, sStar);
+        }
+      }
+      // 射線・法線・角
+      if (st.ray) {
+        const gd = hexA(C.guide, .75), Lr = diag * 0.34;
+        for (let k = 1; k <= 5; k++) {
+          const q = qLo + (qHi - qLo) * k / 6, P = toW(g, 0, q);
+          cvA.arrow(P.x - D.d.x * Lr, P.y - D.d.y * Lr, P.x, P.y, { color: gd, width: 1.4, dash: [6, 5], head: 8 });
+          cvA.arrow(P.x, P.y, P.x + D.d2.x * Lr, P.y + D.d2.y * Lr, { color: gd, width: 1.4, dash: [6, 5], head: 8 });
+        }
+        const P = toW(g, 0, qLo + (qHi - qLo) * 0.5);
+        const nIn = toW(g, -1, 0);
+        cvA.line(P.x, P.y, P.x + nIn.x * Lr * 0.9, P.y + nIn.y * Lr * 0.9, { color: C.muted, width: 1.4, dash: [6, 6] });
+        if (g.si >= 0.03) {
+          const aN = Math.atan2(nIn.y, nIn.x);
+          const ai = angBetween(nIn, { x: -D.d.x, y: -D.d.y }), ar = angBetween(nIn, D.d2);
+          arcPx(cvA, P.x, P.y, 40, aN, aN + ai, { color: C.wave1 });
+          arcPx(cvA, P.x, P.y, 52, aN, aN + ar, { color: C.wave2 });
+          const mid1 = rotv(nIn, ai / 2), mid2 = rotv(nIn, ar / 2);
+          cvA.textPx('i = ' + fmt(st.i, 0) + '°', cvA.px(P.x) + 56 * mid1.x, cvA.py(P.y) - 56 * mid1.y, { color: C.wave1, bold: true });
+          cvA.textPx('r = ' + fmt(st.i, 0) + '°', cvA.px(P.x) + 70 * mid2.x, cvA.py(P.y) - 70 * mid2.y, { color: C.wave2, bold: true });
+        }
+      }
+    });
+    // 壁
+    const seg = clipLine(g.n.x, g.n.y, 0, rect);
+    if (seg) cvA.line(seg[0][0], seg[0][1], seg[1][0], seg[1][1], { color: '#8fd6b0', width: 3 });
+    cvA.textPx('壁', cvA.px(toW(g, 0, qLo).x), cvA.py(toW(g, 0, qLo).y), { dy: -14, dx: -6, align: 'right', color: '#8fd6b0', bold: true });
+    cvA.textPx('方眼 1目盛り = 1 m', cvA.pad.l + 6, cvA.pad.t + cvA.ih - 8, { align: 'left', color: C.muted, size: 11 });
+    cvA.drawHandles();
+  }
+  function angBetween(a, b) { return Math.acos(clamp(a.x * b.x + a.y * b.y, -1, 1)) * Math.sign(a.x * b.y - a.y * b.x || 1); }
+  function rotv(v, a) { const c = Math.cos(a), s = Math.sin(a); return { x: v.x * c - v.y * s, y: v.x * s + v.y * c }; }
+
+  /* ---------- 右：素元波の作図 ---------- */
+  function draft() {   // 作図の中身を数値で返す（検証用にも使う）
+    const g = geo(), D = dirs(g);
+    const L = 2 * g.lam;                       // AB′（壁に沿う長さ）
+    const arrival = q => q * g.si / g.v;       // 壁の点 q に入射波面が着く時刻（A が t=0）
+    const dt = arrival(L);                     // Δt（A が着いてから B′ に着くまで）
+    const BB = g.v * dt;                       // BB′（B が媒質中を進む距離）
+    const RA = g.v * (dt - arrival(0));        // AA″（A から出た素元波の半径）
+    return { g, D, L, dt, BB, RA, radius: q => g.v * (dt - arrival(q)) };
+  }
+  function drawDraft(t) {
+    cvB.clear(); cvB.setPad({ l: 10, r: 10, t: 10, b: 22 });
+    const F0 = draft(), g = F0.g, D = F0.D, L = F0.L;
+    // 図の要素（壁座標）→ 世界座標で外接箱を求め、画面に収まるように置く
+    const A = [0, 0], Bp = [0, L];
+    const B = [-g.ci * g.si * L, g.ci * g.ci * L], A2 = [-g.si * g.ci * L, g.si * g.si * L];
+    const pad = 0.55 * L;
+    const pts = [A, Bp, B, A2, [-0.62 * L, 0], [-0.62 * L, L]];
+    const wpts = pts.map(p => toW(g, p[0], p[1]));
+    wpts.push({ x: -D.d.x * pad, y: -D.d.y * pad });                       // 入射射線の始点
+    wpts.push({ x: D.d2.x * pad, y: D.d2.y * pad });                       // 反射射線の終点
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    wpts.forEach(p => { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
+    const aspect = cvB.iw / Math.max(1, cvB.ih);
+    const halfW = 1.1 * Math.max((x1 - x0) / 2, (y1 - y0) / 2 * aspect);
+    cvB.setViewIso((x0 + x1) / 2, (y0 + y1) / 2, halfW);
+    const V = cvB.view, rect = { x0: V.x0, x1: V.x1, y0: V.y0, y1: V.y1 };
+    const corners = [[V.x0, V.y0], [V.x1, V.y0], [V.x1, V.y1], [V.x0, V.y1]];
+    const poly = clipPoly(corners, g.n.x, g.n.y, 0);
+    if (poly.length >= 3) cvB.plotPts(poly, { close: true, fill: 'rgba(143,214,176,0.12)', color: 'none' });
+    const W = (p, q) => toW(g, p, q);
+    const Aw = W(0, 0), Bpw = W(0, L), Bw = W(B[0], B[1]), A2w = W(A2[0], A2[1]);
+    // ピクセル方向（等方ビュー）— ラベルのずらし量を壁座標で指定する
+    const Np = { x: g.n.x, y: -g.n.y }, Wp = { x: g.w.x, y: -g.w.y };
+    const lab = (a, b) => ({ dx: a * Np.x + b * Wp.x, dy: a * Np.y + b * Wp.y });
+    const degen = g.si < 0.03;
+
+    // 壁
+    const seg = clipLine(g.n.x, g.n.y, 0, rect);
+    if (seg) cvB.line(seg[0][0], seg[0][1], seg[1][0], seg[1][1], { color: '#8fd6b0', width: 3 });
+
+    if (degen) {
+      cvB.text('入射角 0°（垂直入射）', (V.x0 + V.x1) / 2, V.y0 + (V.y1 - V.y0) * 0.24, { color: C.muted, bold: true, size: 15 });
+      cvB.text('波面は壁に平行 — どの点も同時に着き、そのまま折り返す', (V.x0 + V.x1) / 2, V.y0 + (V.y1 - V.y0) * 0.15, { color: C.muted, size: 13 });
+    } else {
+      // 素元波（壁の各点から出た円の、媒質側の半分）
+      if (st.wavelet) {
+        const aw = Math.atan2(g.w.y, g.w.x);
+        for (let k = 0; k <= 6; k++) {
+          const q = L * k / 6, R = F0.radius(q), P = W(0, q);
+          if (R > 0.004) cvB.circle(P.x, P.y, R, { color: hexA(C.guide, 0.6), width: 1.3, a0: aw, a1: aw + Math.PI });
+          cvB.dot(P.x, P.y, 3.2, { color: C.guide });
+        }
+      }
+      // 入射波面 AB ／ 反射波面 B′A″
+      cvB.line(Aw.x, Aw.y, Bw.x, Bw.y, { color: C.wave1, width: 3 });
+      if (st.env) {
+        const ex = 0.22 * L;
+        cvB.line(Bpw.x, Bpw.y, A2w.x - D.u2.x * ex, A2w.y - D.u2.y * ex, { color: C.wave2, width: 3 });
+        const lm = lab(-6, -16), Ew = { x: A2w.x - D.u2.x * ex * 0.85, y: A2w.y - D.u2.y * ex * 0.85 };
+        cvB.text('反射波面', Ew.x, Ew.y, { dx: lm.dx, dy: lm.dy, align: 'right', color: C.wave2, bold: true });
+      }
+      // 長さ（BB′＝青・AA″＝赤・AB′＝灰破線）
+      if (st.len) {
+        cvB.line(Aw.x, Aw.y, Bpw.x, Bpw.y, { color: hexA(C.muted, .85), width: 1.5, dash: [6, 5] });
+        const lm0 = lab(12, 0);
+        cvB.text("AB′ = " + fmt(L, 2) + ' m', (Aw.x + Bpw.x) / 2, (Aw.y + Bpw.y) / 2, { dx: lm0.dx, dy: lm0.dy, color: C.muted });
+        cvB.line(Bw.x, Bw.y, Bpw.x, Bpw.y, { color: C.wave1, width: 4.5, alpha: .95 });
+        const lm1 = lab(-8, 14);
+        cvB.text("BB′ = vΔt = " + fmt(F0.BB, 2) + ' m', (Bw.x + Bpw.x) / 2, (Bw.y + Bpw.y) / 2, { dx: lm1.dx, dy: lm1.dy, align: 'left', color: C.wave1, bold: true });
+        cvB.line(Aw.x, Aw.y, A2w.x, A2w.y, { color: C.wave2, width: 4.5, alpha: .95 });
+        const lm2 = lab(-20, -6);
+        cvB.text('AA″ = vΔt = ' + fmt(F0.RA, 2) + ' m', Aw.x + (A2w.x - Aw.x) * 0.8, Aw.y + (A2w.y - Aw.y) * 0.8, { dx: lm2.dx, dy: lm2.dy, align: 'right', color: C.wave2, bold: true });
+        rightAngle(cvB, Bw, Aw, Bpw);
+        rightAngle(cvB, A2w, Aw, Bpw);
+      }
+      // 点と名前
+      cvB.dot(Aw.x, Aw.y, 4.5, { color: C.text }); cvB.dot(Bw.x, Bw.y, 4.5, { color: C.wave1 });
+      cvB.dot(Bpw.x, Bpw.y, 4.5, { color: C.wave1 }); cvB.dot(A2w.x, A2w.y, 4.5, { color: C.wave2 });
+      const la = lab(10, -12), lb = lab(-10, -10), lbp = lab(12, 10), la2 = lab(-12, -12);
+      cvB.text('A', Aw.x, Aw.y, { dx: la.dx, dy: la.dy, color: C.text, bold: true });
+      cvB.text('B', Bw.x, Bw.y, { dx: lb.dx, dy: lb.dy, color: C.wave1, bold: true });
+      cvB.text("B′", Bpw.x, Bpw.y, { dx: lbp.dx, dy: lbp.dy, color: C.wave1, bold: true });
+      cvB.text('A″', A2w.x, A2w.y, { dx: la2.dx, dy: la2.dy, color: C.wave2, bold: true });
+      // 射線・法線・角
+      if (st.ray) {
+        const nIn = W(-1, 0), Lp = 0.55 * L;
+        cvB.line(Aw.x, Aw.y, Aw.x + nIn.x * Lp, Aw.y + nIn.y * Lp, { color: C.muted, width: 1.4, dash: [6, 6] });
+        cvB.arrow(Aw.x - D.d.x * Lp, Aw.y - D.d.y * Lp, Aw.x, Aw.y, { color: C.wave1, width: 2.5 });
+        cvB.arrow(Aw.x, Aw.y, Aw.x + D.d2.x * Lp, Aw.y + D.d2.y * Lp, { color: C.wave2, width: 2.5 });
+        const aN = Math.atan2(nIn.y, nIn.x);
+        const ai = angBetween(nIn, { x: -D.d.x, y: -D.d.y }), ar = angBetween(nIn, D.d2);
+        arcPx(cvB, Aw.x, Aw.y, 34, aN, aN + ai, { color: C.wave1 });
+        arcPx(cvB, Aw.x, Aw.y, 46, aN, aN + ar, { color: C.wave2 });
+        const m1 = rotv(nIn, ai / 2), m2 = rotv(nIn, ar / 2);
+        cvB.textPx('i = ' + fmt(st.i, 0) + '°', cvB.px(Aw.x) + 50 * m1.x, cvB.py(Aw.y) - 50 * m1.y, { color: C.wave1, bold: true });
+        cvB.textPx('r = ' + fmt(st.i, 0) + '°', cvB.px(Aw.x) + 72 * m2.x, cvB.py(Aw.y) - 72 * m2.y, { color: C.wave2, bold: true });
+      }
+    }
+    cvB.axes({ grid: true, xStep: 1, yStep: 1, xAxis: false, yAxis: false, xTicks: false, yTicks: false });
+    cvB.textPx('方眼 1目盛り = 1 m', cvB.pad.l + 6, cvB.pad.t + cvB.ih - 8, { align: 'left', color: C.muted, size: 11 });
+  }
+  function rightAngle(cv, P, Q, R) {   // P での直角（PQ・PR 方向に小さな四角）
+    const n1 = norm({ x: Q.x - P.x, y: Q.y - P.y }), n2 = norm({ x: R.x - P.x, y: R.y - P.y });
+    const s = 9 / cv.sx;
+    const a = { x: P.x + n1.x * s, y: P.y + n1.y * s }, b = { x: P.x + n2.x * s, y: P.y + n2.y * s };
+    cv.plotPts([[a.x, a.y], [a.x + n2.x * s, a.y + n2.y * s], [b.x, b.y]], { color: hexA(C.muted, .9), width: 1.3 });
+  }
+  function norm(v) { const L = Math.hypot(v.x, v.y) || 1; return { x: v.x / L, y: v.y / L }; }
+
+  /* ---------- 右：壁つき波動タンク（詳しく） ---------- */
+  const tank = createTank(cvB, {
+    budget: 64000, maxX: 420, maxY: 260,
+    wall: (wl, nx, ny) => {
+      const g = geo(), O = { x: nx * 0.74, y: ny * 0.5 };
+      const ngx = g.n.x, ngy = -g.n.y;
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if ((i - O.x) * ngx + (j - O.y) * ngy >= 0) wl[j * nx + i] = 1;
+    },
+    inject: (un, nx, ny, phase, amp, wall, m) => {
+      const g = geo();
+      const dgx = g.ci * g.n.x + g.si * g.w.x, dgy = -(g.ci * g.n.y + g.si * g.w.y);
+      injectEdgePlane(un, nx, ny, phase, amp, dgx, dgy, 0.5 * TST, wall, m);
+    },
+    warmSteps: () => 2.4 * Math.max(tank.nx, tank.ny || 160) / 0.5,
+    absorb: () => 0.62 * TST / 2,
+    Tst: () => TST, rate: () => TST / st.T, gain: () => st.gain
+  });
+  function drawTank(dt, running) {
+    tank.draw(dt, running);
+    cvB.textPx('壁（変位 0）　入射角 i = ' + fmt(st.i, 0) + '°　壁の角度 ' + (Math.abs(st.wall) < 0.5 ? '垂直' : fmt(st.wall, 0) + '°'),
+      cvB.pad.l + 8, cvB.pad.t + 12, { align: 'left', color: C.text, size: 12 });
+    cvB.textPx('λ = ' + (TST / 2) + ' セル（1 m = ' + fmt(TST / 2 / st.lam, 1) + ' セル）　波源の周期 ' + TST + ' ステップ ＝ T = ' + fmt(st.T, 1) + ' s　格子 ' + tank.nx + '×' + tank.ny,
+      cvB.pad.l + 8, cvB.pad.t + 30, { align: 'left', color: C.muted, size: 12 });
+  }
+  function setTankMode(on) {
+    st.tank = on;
+    cvB.setTitle(on ? T_TANK : T_DRAFT);
+    const sim = ctx.sim;
+    sim.stepBack.disabled = on;
+    sim.stepBack.title = on ? '波動タンクの表示中は時間を戻せません' : '1コマ戻す（←）';
+    if (sim.range) { sim.range.disabled = on; sim.range.title = on ? '波動タンクの表示中は時間を戻せません' : '時間（停止中にドラッグで過去へ戻れる）'; }
+    if (on) tank.rebuild();
+  }
+
+  return {
+    draw(t, dt, running) {
+      mark('reflect');
+      if (st.sweep) {
+        const q = (t / SWEEP_P) - Math.floor(t / SWEEP_P);
+        const iNow = Math.round(SWEEP_MAX * (q < 0.5 ? 2 * q : 2 * (1 - q)));
+        if (iNow !== st.i) { st.i = iNow; sI.set(iNow, true); if (st.tank) tank.rebuild(); }   // スイープ中は早送りしない（毎秒変わるため）
+      }
+      drawMarch(t);
+      if (st.tank) drawTank(dt, running); else drawDraft(t);
+      const F0 = draft(), g = F0.g;
+      if (g.si < 0.03) {
+        F.set('v = λ/T = ' + fmt(g.lam, 2) + ' / ' + fmt(g.T, 2) + ' = <b>' + fmt(g.v, 2) + '</b> m/s'
+          + '<br>入射角 0°：A も B も同時に壁に着く（Δt = 0）ので BB′ = 0、AA″ = 0。波面は壁に平行なまま向きだけが反転する。');
+      } else {
+        F.set('v = λ/T = ' + fmt(g.lam, 2) + ' / ' + fmt(g.T, 2) + ' = <b>' + fmt(g.v, 2) + '</b> m/s'
+          + "　Δt（B が B′ に着くまで）= BB′/v = <b>" + fmt(F0.dt, 2) + '</b> s'
+          + "<br>BB′ = v·Δt = " + fmt(g.v, 2) + ' × ' + fmt(F0.dt, 2) + ' = <b>' + fmt(F0.BB, 2) + '</b> m　＝　AA″ = v·Δt = <b>' + fmt(F0.RA, 2) + '</b> m'
+          + '　<em>（A は B より Δt だけ早く壁に着いたので、その分だけ素元波が広がっている）</em>'
+          + "<br>直角三角形 ABB′ と B′A″A：AB′ = " + fmt(F0.L, 2) + ' m が共通・BB′ = AA″・∠B = ∠A″ = 90° → 合同'
+          + '　→　<b>i = r = ' + fmt(st.i, 1) + '</b>°');
+      }
+      DBG.reflGeom = () => { const g2 = geo(); return { i: st.i, wall: st.wall, lam: st.lam, T: st.T, v: g2.v, tank: st.tank }; };
+      DBG.reflPos = (m, s, tt) => {   // 隊列モデルの点（波面 m・波面に沿う位置 s）の時刻 tt での世界座標
+        const g2 = geo(), D2 = dirs(g2), tHit = m * g2.T + s * (g2.si / g2.ci) / g2.v;
+        if (tt < tHit) { const L = g2.v * (tt - m * g2.T); return { x: s * D2.u.x + L * D2.d.x, y: s * D2.u.y + L * D2.d.y, hit: false }; }
+        const P = toW(g2, 0, s / g2.ci), e = g2.v * (tt - tHit);
+        return { x: P.x + e * D2.d2.x, y: P.y + e * D2.d2.y, hit: true };
+      };
+      DBG.reflDraft = () => {         // 作図の検証量（包絡線は B′ から A の素元波への接線として独立に求める）
+        const f = draft(), gg = f.g, L = f.L;
+        const phi = Math.asin(clamp(f.RA / L, -1, 1));               // B′→A から接線までの角
+        const tx = -Math.sin(phi), ty = -Math.cos(phi);               // 接線の向き（壁座標）
+        const nlx = -ty, nly = tx;                                    // 接線の法線（壁座標・単位）
+        const c = nlx * 0 + nly * L;                                  // 接線: n·X = c （B′=(0,L) を通る）
+        let maxErr = 0;
+        for (let k = 0; k <= 12; k++) { const q = L * k / 12; maxErr = Math.max(maxErr, Math.abs(Math.abs(nlx * 0 + nly * q - c) - f.radius(q))); }
+        const px = -nlx, py = -nly;                                   // 媒質側を向く進行方向
+        const r = Math.acos(clamp(-(px * 1 + py * 0), -1, 1)) * R2D;   // 法線 (−1,0) との角
+        return { i: st.i, r, ABp: L, BBp: f.BB, AAp: f.RA, dt: f.dt, v: gg.v, maxTangentErr: maxErr };
+      };
+      DBG.reflTank = () => ({ nx: tank.nx, ny: tank.ny, step: tank.step, lam: TST / 2, on: st.tank,
+        e: tank.rms(tank.nx * 0.12, tank.nx * 0.66, tank.ny * 0.2, tank.ny * 0.8) });
+    },
+    get canStepBack() { return !st.tank; },
+    onStep(dir) { if (dir > 0 && st.tank) tank.advance(4); },
+    onReset() { tank.clear(); },
+    period: () => st.T
+  };
+}
+
+/* =========================================================
+   E-15 屈折（現象）— 左＝隊列モデル／右＝二媒質の波動タンク（λ・v・T を同調）
    ========================================================= */
 function buildRefract(ctx) {
-  ctx.stage.classList.add('stageRF');
+  ctx.layout('2');
   const cvA = ctx.canvas({ title: '隊列モデル — 波面＝「横一列に並んで同じ速さで進む点の列」。境界に着いた点から速さが変わる' });
-  const cvB = ctx.canvas({ title: '二媒質の波動タンク（数値計算）— 左上から斜めに入射。反射波と屈折波が同時に出る' });
-  const st = { v1: 1.5, v2: 1.0, i: 50, T: 2, dots: true, ray: false, gain: 2.4, Tst: 26 };
+  const cvB = ctx.canvas({ title: '二媒質の波動タンク（数値計算）— 同じ λ・T・入射角で解いたもの' });
+  const st = { v1: 1.5, v2: 1.0, i: 50, T: 2, dots: true, ray: false, gain: 1 };
+  const CELL_MIN = 16;   // 遅い側の λ を最低このセル数にする（数値分散を抑える）
 
-  ui.slider(ctx.controls, { label: '媒質1の速さ v₁', min: 0.5, max: 2, step: 0.05, value: 1.5, unit: 'm/s', onInput: v => { st.v1 = v; remed(); } });
-  ui.slider(ctx.controls, { label: '媒質2の速さ v₂', min: 0.5, max: 2, step: 0.05, value: 1.0, unit: 'm/s', onInput: v => { st.v2 = v; remed(); } });
-  ui.slider(ctx.controls, { label: '入射角 i', min: 0, max: 80, step: 1, value: 50, digits: 0, unit: '°', onInput: v => { st.i = v; rebuildSrc(); } });
+  const reTank = () => { tank.rebuild(); tank.warm(); };   // 条件を変えたら早送りして新しい定常状態にする
+  ui.slider(ctx.controls, { label: '媒質1の速さ v₁', min: 0.5, max: 2, step: 0.05, value: 1.5, unit: 'm/s', onInput: v => { st.v1 = v; reTank(); } });
+  ui.slider(ctx.controls, { label: '媒質2の速さ v₂', min: 0.5, max: 2, step: 0.05, value: 1.0, unit: 'm/s', onInput: v => { st.v2 = v; reTank(); } });
+  ui.slider(ctx.controls, { label: '入射角 i', min: 0, max: 80, step: 1, value: 50, digits: 0, unit: '°', onInput: v => { st.i = v; reTank(); } });
   ui.sep(ctx.controls);
   ui.toggle(ctx.controls, { label: '波面上の点（隊列）', checked: true, onChange: v => st.dots = v });
   ui.toggle(ctx.controls, { label: '射線（点が通る道すじ）', checked: false, onChange: v => st.ray = v });
+  ui.slider(ctx.controls, { label: 'T（周期）', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => { st.T = v; reTank(); } });
   const F = ui.formula(ctx.controls, '');
-  note(ctx.controls, '上＝隊列モデル。波面を「横一列に並んで同じ速さで進む点の列」と見る。<b>境界に先に着いた点から順に、速さが v₁ から v₂ に変わる</b>。速さが変わる時刻が点ごとにずれるので、列は境界のところで折れる。');
-  note(ctx.controls, '下＝同じ状況を2次元波動方程式で数値計算したもの（上半分と下半分で速さだけが違う）。<b>境界では屈折波だけでなく反射波も出る</b>。時間を巻き戻すことはできない（◀ は使えない）。');
-  note(ctx.controls, '作図の手順（素元波から屈折波面をつくる）は「15 屈折の作図と全反射」タブ。');
-  ui.slider(ctx.detail, { label: 'T（周期）', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
-  ui.slider(ctx.detail, { label: 'タンクの明るさ', min: 1, max: 6, step: 0.1, value: 2.4, digits: 1, onInput: v => st.gain = v });
+  note(ctx.controls, '左＝隊列モデル。波面を「横一列に並んで同じ速さで進む点の列」と見る。<b>境界に先に着いた点から順に、速さが v₁ から v₂ に変わる</b>。速さが変わる時刻が点ごとにずれるので、列は境界のところで折れる。');
+  note(ctx.controls, '右＝同じ状況を2次元波動方程式で数値計算したもの（上半分と下半分で速さだけが違う）。<b>左右は同じ λ₁・λ₂・同じ T・同じ入射角</b>で動かしていて、境界の高さも同じ。<b>境界では屈折波だけでなく反射波も出る</b>。右のタンクは場を1ステップずつ積み上げるので、時間を巻き戻すことはできない（◀ は使えない）。');
+  note(ctx.controls, '作図の手順（素元波から屈折波面をつくる）は「16 屈折の作図と全反射」タブ。');
+  ui.slider(ctx.detail, { label: 'タンクの明るさ', min: 0.3, max: 3, step: 0.1, value: 1, digits: 1, onInput: v => st.gain = v });
   note(ctx.detail, '隊列モデルは作図ではなく<b>追跡</b>：境界を x = x_c で横切るレイごとに「その点が境界に着く時刻 t_c」を出し、t ＜ t_c なら速さ v₁ で向き (sin i, −cos i)、t ＞ t_c なら速さ v₂ で向き (sin r, −cos r) として位置を計算している。列に沿った点の間隔が境界の前後で変わるのは、同じ本数のレイがつくる幅（ビームの幅）が cos i : cos r で変わるため。');
-  note(ctx.detail, 'タンクは上半分・下半分でクーラン数（＝1ステップに進むセル数）を変えている。速い方を 0.5 に固定し、遅い方を比で決める。境界での反射は、速さが急に変わる面では必ず起きる現象（数値計算の誤差ではない）。');
-
-  // コマ戻し ◀ は無効（下段のタンクは場を1ステップずつ積み上げる）
-  ctx.sim.stepBack.disabled = true;
-  ctx.sim.stepBack.title = '波動タンクを含むタブは時間を戻せません';
+  note(ctx.detail, '<b>左右の同調のしかた</b>：1 m ＝ N セルとして長さをセルに換算する（N は格子の大きさと λ から自動：遅い側の λ が ' + CELL_MIN + ' セル以上、かつ速い側の λ が画面に6個ほど入る値）。速い側のクーラン数（1ステップに進むセル数）を 0.5 に固定し、遅い側は v₁:v₂ の比で決める。波源の周期は λ₁ の値から逆算した<b>ステップ数</b>で、1周期がちょうど T 秒になる速さで計算を進めている。だから左右で λ も周期も一致する。');
 
   /* ---------- 共通の幾何 ---------- */
   function geom() {
@@ -222,6 +711,13 @@ function buildRefract(ctx) {
     const rr = total ? 0 : Math.asin(clamp(s, -1, 1));
     return { i, si, ci, v1, v2, T, sr: Math.sin(rr), cr: Math.cos(rr), rr, total, lam1: v1 * T, lam2: v2 * T };
   }
+  // 1 m あたりのセル数 N（縦に速い側の λ が 5.5 個入る大きさ。ただし遅い側の λ は CELL_MIN セル以上）
+  function cellsPerM() {
+    const g = geom(), lamFast = Math.max(g.lam1, g.lam2), lamSlow = Math.min(g.lam1, g.lam2);
+    const ny = tank.ny || 160;
+    return Math.max(ny / (5.5 * lamFast), CELL_MIN / lamSlow);
+  }
+  function TstOf() { const g = geom(); return Math.max(12, Math.round(2 * cellsPerM() * Math.max(g.lam1, g.lam2))); }
   // 境界を x=xc で横切るレイ上の、波面 m の点の時刻 tt における位置
   function march(xc, m, tt, g) {
     const tc = g.T * m + xc * g.si / g.v1;   // この点が境界に着く時刻
@@ -232,17 +728,10 @@ function buildRefract(ctx) {
     return { x: xc + g.sr * g.v2 * e, y: -g.cr * g.v2 * e, med: 2 };
   }
 
-  /* ---------- 上段：隊列モデル ---------- */
+  /* ---------- 左：隊列モデル ---------- */
   function drawMarch(t) {
-    cvA.clear();
-    // 投影用の横長パネルでは縦の見える範囲が足りなくなるので、描画域の横幅を縦の3.2倍までに絞って中央に置く
-    cvA.setPad({ l: 12, r: 12, t: 12, b: 24 });
-    const innerH = Math.max(1, cvA.ih);
-    const wantW = Math.min(cvA.w - 24, 5.2 * innerH);
-    const side = Math.max(12, (cvA.w - wantW) / 2);
-    cvA.setPad({ l: side, r: side });
-    const aspect = cvA.iw / Math.max(1, cvA.ih);
-    const halfW = Math.max(3.0, 1.8 * aspect);
+    cvA.clear(); cvA.setPad({ l: 10, r: 10, t: 10, b: 22 });
+    const halfW = (tank.nx || 160) / (2 * cellsPerM());   // タンクと同じ横幅［m］
     cvA.setViewIso(0, 0, halfW);
     const V = cvA.view, g = geom();
     fillRectPx(cvA, cvA.pad.l, cvA.py(V.y1), cvA.iw, cvA.py(0) - cvA.py(V.y1), 'rgba(105,183,255,0.055)');
@@ -319,147 +808,85 @@ function buildRefract(ctx) {
 
     cvA.line(V.x0, 0, V.x1, 0, { color: '#8fd6b0', width: 2.5 });
     cvA.axes({ xLabel: 'x [m]', grid: false, xAxis: false, yAxis: false, xTicks: false, yTicks: false });
-    cvA.text('媒質1　v₁ = ' + fmt(g.v1, 2) + ' m/s　λ₁ = v₁T = ' + fmt(g.lam1, 2) + ' m', V.x0 + 0.12, V.y1, { dy: 14, align: 'left', color: C.wave1, bold: true });
-    cvA.text('媒質2　v₂ = ' + fmt(g.v2, 2) + ' m/s' + (g.total ? '' : '　λ₂ = v₂T = ' + fmt(g.lam2, 2) + ' m'), V.x0 + 0.12, V.y0, { dy: -12, align: 'left', color: C.dens, bold: true });
+    cvA.text('媒質1　v₁ = ' + fmt(g.v1, 2) + ' m/s　λ₁ = v₁T = ' + fmt(g.lam1, 2) + ' m', V.x0 + 0.02 * (V.x1 - V.x0), V.y1, { dy: 14, align: 'left', color: C.wave1, bold: true });
+    cvA.text('媒質2　v₂ = ' + fmt(g.v2, 2) + ' m/s' + (g.total ? '' : '　λ₂ = v₂T = ' + fmt(g.lam2, 2) + ' m'), V.x0 + 0.02 * (V.x1 - V.x0), V.y0, { dy: -12, align: 'left', color: C.dens, bold: true });
     if (g.total) cvA.text('屈折波なし（全反射）', 0, V.y0 * 0.5, { color: C.wave2, bold: true, size: 16 });
     if (g.si < 1e-3) cvA.text('入射角 0°：どの点も同時に境界に着くので列は曲がらない（間隔だけ λ₁ → λ₂ に変わる）', 0, V.y1 * 0.55, { color: C.muted, size: 13 });
   }
 
-  /* ---------- 下段：二媒質の波動タンク（FDTD） ---------- */
-  let nx = 0, ny = 0, u, up, un, cA, sig, off, offg, img, step = 0, acc = 0, lastT = 0;
-  function alloc(_nx, _ny) {
-    nx = _nx; ny = _ny; const n = nx * ny;
-    u = new Float32Array(n); up = new Float32Array(n); un = new Float32Array(n);
-    cA = new Float32Array(n); sig = new Float32Array(n);
-    off = document.createElement('canvas'); off.width = nx; off.height = ny;
-    offg = off.getContext('2d'); img = offg.createImageData(nx, ny);
-    const d = img.data; for (let k = 0; k < n; k++) d[4 * k + 3] = 255;
-    const L = 15;
-    for (let j = 0; j < ny; j++) for (let i2 = 0; i2 < nx; i2++) {
-      const dist = Math.min(i2, j, nx - 1 - i2, ny - 1 - j);
-      sig[j * nx + i2] = dist >= L ? 0 : 0.14 * Math.pow((L - dist) / L, 2);
-    }
-    step = 0; acc = 0; remed(); rebuildSrc();
-  }
-  function remed() {   // 上半分＝媒質1、下半分＝媒質2（クーラン数＝1ステップに進むセル数）
-    if (!cA) return;
-    const jb = ny >> 1, vmax = Math.max(st.v1, st.v2);
-    const c1 = 0.5 * st.v1 / vmax, c2 = 0.5 * st.v2 / vmax;
-    for (let j = 0; j < ny; j++) { const c = j < jb ? c1 : c2; for (let i2 = 0; i2 < nx; i2++) cA[j * nx + i2] = c; }
-    st.Tst = clamp(Math.round(9 / Math.min(c1, c2)), 18, 70);   // 遅い方でも λ ≈ 9 セル以上
-  }
-  function clearField() { if (u) { u.fill(0); up.fill(0); un.fill(0); } step = 0; acc = 0; }
-  // 波源（波面と同じ向きの線）と、その「後ろ側」だけを吸収するマスク
-  const SRC = { x: 0, y: 0, dx: 0, dy: 1, ux: 1, uy: 0, Sh: 30 };
-  let bmask = null;
-  function rebuildSrc() {
-    if (!cA) return;
-    const i = st.i * D2R, sgx = Math.sin(i), cgy = Math.cos(i);
-    const jb = ny >> 1, hitX = nx * 0.42;
-    const Lb = 0.92 * Math.min((jb - 16) / Math.max(cgy, 1e-3), sgx > 1e-3 ? (hitX - 16) / sgx : 1e9);
-    SRC.x = hitX - sgx * Lb; SRC.y = jb - cgy * Lb;
-    SRC.dx = sgx; SRC.dy = cgy; SRC.ux = cgy; SRC.uy = -sgx;
-    SRC.Sh = Math.max(10, Math.min(32, ny * 0.30));
-    if (!bmask || bmask.length !== nx * ny) bmask = new Float32Array(nx * ny);
-    bmask.fill(0);
-    for (let j = 0; j < ny; j++) for (let i2 = 0; i2 < nx; i2++) {
-      const px = i2 - SRC.x, py = j - SRC.y;
-      const along = px * SRC.dx + py * SRC.dy, perp = px * SRC.ux + py * SRC.uy;
-      if (along < -3 && Math.abs(perp) < SRC.Sh * 1.7) {
-        const d = Math.min(1, (-along - 3) / 10); bmask[j * nx + i2] = 0.10 * d * d;
-      }
-    }
-  }
-  function inject() {
-    const val = Math.min(1, step / (2 * st.Tst)) * sinT(step / st.Tst), Sh = SRC.Sh;
-    for (let q = -Sh; q <= Sh; q += 0.5) {
-      const w = 0.5 * (1 + Math.cos(Math.PI * q / Sh));
-      for (let d = 0; d <= 1.5; d += 0.5) {
-        const gx = Math.round(SRC.x + SRC.ux * q + SRC.dx * d), gy = Math.round(SRC.y + SRC.uy * q + SRC.dy * d);
-        if (gx > 1 && gx < nx - 2 && gy > 1 && gy < ny - 2) un[gy * nx + gx] = val * w;
-      }
-    }
-  }
-  function advance(n) {
-    for (let s = 0; s < n; s++) {
-      for (let j = 1; j < ny - 1; j++) {
-        const row = j * nx;
-        for (let i2 = 1; i2 < nx - 1; i2++) {
-          const k = row + i2, c = cA[k];
-          const lap = u[k + 1] + u[k - 1] + u[k + nx] + u[k - nx] - 4 * u[k];
-          const sg = sig[k] * (c * 2) + bmask[k]; // 吸収は速さに比例（c/0.5）＋波源の後ろ側
-          un[k] = (2 * u[k] - (1 - sg) * up[k] + c * c * lap) / (1 + sg);
-        }
-      }
-      for (let i2 = 0; i2 < nx; i2++) { un[i2] = 0; un[(ny - 1) * nx + i2] = 0; }
-      for (let j = 0; j < ny; j++) { un[j * nx] = 0; un[j * nx + nx - 1] = 0; }
-      inject();
-      const tmp = up; up = u; u = un; un = tmp;
-      step++;
-    }
-  }
-  function render() {
-    const d = img.data, gg = st.gain;
-    for (let k = 0, n = nx * ny; k < n; k++) {
-      const o = 4 * k;
-      let v = u[k] * gg; if (v > 1) v = 1; else if (v < -1) v = -1;
-      const m = Math.pow(Math.abs(v), 0.75);
-      if (v >= 0) { d[o] = 84 * m; d[o + 1] = 255 * m; d[o + 2] = 138 * m; }
-      else { d[o] = 60 * m; d[o + 1] = 130 * m; d[o + 2] = 255 * m; }
-    }
-    offg.putImageData(img, 0, 0);
-  }
+  /* ---------- 右：二媒質の波動タンク ---------- */
+  const tank = createTank(cvB, {
+    media: (cA, nx, ny) => {
+      const jb = ny >> 1, vmax = Math.max(st.v1, st.v2);
+      const c1 = 0.5 * st.v1 / vmax, c2 = 0.5 * st.v2 / vmax;
+      for (let j = 0; j < ny; j++) { const c = j < jb ? c1 : c2; for (let i = 0; i < nx; i++) cA[j * nx + i] = c; }
+    },
+    inject: (un, nx, ny, phase, amp, wall, m) => {   // 上の辺から斜めに入射する平面波（吸収層の内側から）
+      const i = st.i * D2R, vmax = Math.max(st.v1, st.v2);
+      const Tst = TstOf(), lam1c = (0.5 * st.v1 / vmax) * Tst;
+      injectEdgePlane(un, nx, ny, phase, amp, Math.sin(i), Math.cos(i), lam1c, wall, m, 'row');
+    },
+    warmSteps: () => {   // 画面が波で満たされるまでの目安（起動・リセット直後は早送りする）
+      const g = geom(), vmax = Math.max(st.v1, st.v2), ny = tank.ny || 160;
+      const c1 = 0.5 * st.v1 / vmax, c2 = 0.5 * st.v2 / vmax;
+      return ny / (c1 * Math.max(g.ci, 0.25)) + 0.5 * ny / (c2 * Math.max(g.cr, 0.25));
+    },
+    budget: 64000, maxX: 420, maxY: 260,
+    absorb: () => 0.62 * Math.max(st.v1, st.v2) * st.T * cellsPerM(),   // λ（長い方）の 0.6 倍ほど
+    Tst: TstOf, rate: () => TstOf() / st.T, gain: () => st.gain
+  });
   function drawTank(dt, running) {
-    cvB.setPad({ l: 8, r: 8, t: 8, b: 8 });
-    const aspect = cvB.iw / Math.max(1, cvB.ih);
-    const budget = 26000;
-    const wantX = clamp(Math.round(Math.sqrt(budget * aspect)), 90, 250);
-    const wantY = clamp(Math.round(budget / wantX), 70, 180);
-    if (Math.abs(wantX - nx) > 4 || Math.abs(wantY - ny) > 4) alloc(wantX, wantY);
-    if (running && dt > 0) { acc += dt * 150; let n = Math.floor(acc); acc -= n; if (n > 14) n = 14; if (n > 0) advance(n); }
-    cvB.clear(); render();
-    const gx = cvB.ctx; gx.save(); gx.imageSmoothingEnabled = true;
-    gx.drawImage(off, cvB.pad.l, cvB.pad.t, cvB.iw, cvB.ih); gx.restore();
+    tank.draw(dt, running);
+    const g = geom(), N = cellsPerM(), nx = tank.nx, ny = tank.ny;
     const yb = cvB.pad.t + cvB.ih * ((ny >> 1) / ny);
     cvB.linePx(cvB.pad.l, yb, cvB.pad.l + cvB.iw, yb, { color: '#8fd6b0', width: 2 });
-    const g = geom();
-    cvB.textPx('媒質1　v₁ = ' + fmt(g.v1, 2) + ' m/s', cvB.pad.l + 8, cvB.pad.t + 12, { align: 'left', color: C.wave1, bold: true, size: 12 });
-    cvB.textPx('媒質2　v₂ = ' + fmt(g.v2, 2) + ' m/s', cvB.pad.l + 8, yb + 14, { align: 'left', color: C.dens, bold: true, size: 12 });
-    cvB.textPx('入射角 i = ' + fmt(st.i, 0) + '°　（格子 ' + nx + '×' + ny + '　波源の周期 ' + st.Tst + ' ステップ）',
-      cvB.pad.l + cvB.iw - 8, cvB.pad.t + (cvB.iw < 560 ? 30 : 12), { align: 'right', color: C.muted, size: 12 });
-    DBG.probeRF = () => {
-      const jb = ny >> 1, box = (i0, i1, j0, j1) => {
-        let s = 0, c = 0;
-        for (let j = j0 | 0; j < (j1 | 0); j++) for (let i2 = i0 | 0; i2 < (i1 | 0); i2++) { const v = u[j * nx + i2]; s += v * v; c++; }
-        return Math.sqrt(s / Math.max(1, c));
-      };
-      return { med1: box(nx * 0.25, nx * 0.65, jb - 40, jb - 8), med2: box(nx * 0.3, nx * 0.9, jb + 14, jb + 50), nx, ny, step, Tst: st.Tst };
-    };
+    cvB.textPx('媒質1　λ₁ = ' + fmt(g.lam1, 2) + ' m = ' + fmt(N * g.lam1, 0) + ' セル', cvB.pad.l + 8, cvB.pad.t + 12, { align: 'left', color: C.wave1, bold: true, size: 12 });
+    cvB.textPx('媒質2　λ₂ = ' + fmt(g.lam2, 2) + ' m = ' + fmt(N * g.lam2, 0) + ' セル', cvB.pad.l + 8, yb + 14, { align: 'left', color: C.dens, bold: true, size: 12 });
+    cvB.textPx('1 m = ' + fmt(N, 1) + ' セル　波源の周期 ' + TstOf() + ' ステップ ＝ T = ' + fmt(st.T, 1) + ' s　格子 ' + nx + '×' + ny,
+      cvB.pad.l + cvB.iw - 8, cvB.pad.t + (cvB.iw < 420 ? 30 : 12), { align: 'right', color: C.muted, size: 12 });
   }
 
   return {
     draw(t, dt, running) {
       mark('refract');
-      lastT = t;
       const g = geom();
+      drawTank(dt, running);   // 先に格子を確保（左の縮尺がタンクに合う）
       drawMarch(t);
-      drawTank(dt, running);
       DBG.march = (xc, m, tt) => march(xc, m, tt, geom());
       DBG.geom = geom;
+      DBG.refractSync = () => {
+        const gg = geom(), N = cellsPerM(), nx = tank.nx, ny = tank.ny, jb = ny >> 1;
+        return {
+          N, nx, ny, Tst: TstOf(), step: tank.step,
+          lam1m: gg.lam1, lam2m: gg.lam2, lam1cell: N * gg.lam1, lam2cell: N * gg.lam2,
+          halfW: nx / (2 * N), i: st.i, r: gg.rr * R2D,
+          lamX1: tank.lamRow(Math.round(jb - ny * 0.22), nx * 0.12, nx * 0.92),   // 境界に沿う見かけの波長（媒質1）
+          lamX2: tank.lamRow(Math.round(jb + ny * 0.22), nx * 0.12, nx * 0.92)    // 同（媒質2）
+        };
+      };
+      DBG.probeRF = () => {
+        const nx = tank.nx, ny = tank.ny, jb = ny >> 1;
+        return {
+          med1: tank.rms(nx * 0.25, nx * 0.65, jb - ny * 0.28, jb - ny * 0.05),
+          med2: tank.rms(nx * 0.3, nx * 0.9, jb + ny * 0.09, jb + ny * 0.32),
+          nx, ny, step: tank.step, Tst: TstOf()
+        };
+      };
       F.set('v₁ = ' + fmt(g.v1, 2) + ' m/s　v₂ = ' + fmt(g.v2, 2) + ' m/s　T = ' + fmt(g.T, 1) + ' s　→　λ₁ = v₁T = <b>' + fmt(g.lam1, 2) + '</b> m　λ₂ = v₂T = <b>' + fmt(g.lam2, 2) + '</b> m'
         + '<br>i = ' + fmt(st.i, 0) + '°　sin r = (v₂/v₁) sin i = ' + fmt(g.v2 / g.v1, 3) + ' × ' + fmt(g.si, 3) + ' = ' + fmt((g.v2 / g.v1) * g.si, 3)
         + (g.total
           ? '　＞ 1　→　<span class="bad">屈折波なし</span>（この角では媒質2に入る波面がつくれない）'
           : '　→　r = <b>' + fmt(g.rr * R2D, 1) + '</b>°'));
     },
-    onReset() { clearField(); },
-    onStep(dir) { if (dir > 0) advance(25); else ctx.sim.t = lastT; },
+    canStepBack: false,
+    onReset() { tank.clear(); },
+    onStep(dir) { if (dir > 0) tank.advance(Math.max(2, Math.round(TstOf() / 12))); },
     period: () => st.T
   };
 }
 
 /* =========================================================
-   E-15 屈折の作図と全反射
+   E-16 屈折の作図と全反射
    ========================================================= */
 function buildRefract2(ctx) {
   const cv = ctx.canvas({ title: '屈折の作図 — 境界上の各点から出た素元波（媒質2）の包絡線が屈折波面' });
@@ -638,7 +1065,7 @@ function buildRefract2(ctx) {
 }
 
 /* =========================================================
-   E-16 回折（2次元波動タンク・FDTD）
+   E-17 回折（2次元波動タンク・FDTD）
    ========================================================= */
 function buildDiffract(ctx) {
   const cv = ctx.canvas({ title: '2次元 波動タンク（数値計算）— 左から平面波／中央の障壁とスリット' });
@@ -663,10 +1090,6 @@ function buildDiffract(ctx) {
   note(ctx.controls, '<b>1セル＝格子の1目盛り</b>。実際の長さではなく、λ とスリット幅 w の<b>比</b>だけが現象を決める。');
   note(ctx.controls, 'このタブは各時刻の場を1ステップずつ積み上げて計算しているので、<b>時間を巻き戻すことはできない</b>（◀ は使えない。停止・再開・スロー・リセット・▶ のみ）。');
   note(ctx.detail, '2次元波動方程式 ∂²u/∂t² = c²∇²u を差分法で解いている。スライダーの「速さ v」は差分法のクーラン数 s = v·dt/dx そのもの（dx = 1セル、dt = 1ステップ）。この解き方が安定なのは s ≤ 1/√2 ≒ 0.71 のときなので、上限を 0.5 にしてある。画面の端は吸収層（反射させない）。障壁は変位 0 の固い壁。');
-
-  // コマ戻し ◀ は無効（場は1ステップずつ積み上げる＝過去の場を持っていない）
-  ctx.sim.stepBack.disabled = true;
-  ctx.sim.stepBack.title = '回折は時間を戻せません（場を1ステップずつ積み上げる数値計算のため）';
 
   // --- 格子 ---
   let nx = 0, ny = 0, u, up, un, wall, sig, off, offg, img, step = 0, acc = 0, phase = 0, lastT = 0;
@@ -792,15 +1215,15 @@ function buildDiffract(ctx) {
       RL.set(fmt(lam, 1) + ' セル');
       RO.set(fmt(st.w / lam, 2));
     },
+    canStepBack: false,   // ◀（←キー）は共通フックで無効（場を1ステップずつ積み上げるため）
     onReset() { clearField(); },
-    // ◀（←キー）で t だけ戻って場が戻らない「空振り」を防ぐ: 後退は t も戻さない
-    onStep(dir) { if (dir > 0) advance(25); else ctx.sim.t = lastT; },
+    onStep(dir) { if (dir > 0) advance(25); },
     period: () => 2
   };
 }
 
 /* =========================================================
-   E-17 干渉
+   E-18 干渉
    ========================================================= */
 function buildInterfere(ctx) {
   ctx.stage.classList.add('stageIF');
@@ -952,10 +1375,11 @@ Nami.init({
   title: 'E 応用（ホイヘンスの原理）',
   tabs: [
     { id: 'huygens', label: '13 素元波', period: tabPeriod, build: buildHuygens },
-    { id: 'refract', label: '14 屈折', scrub: false, period: tabPeriod, build: buildRefract },
-    { id: 'refract2', label: '15 屈折の作図と全反射', period: tabPeriod, build: buildRefract2 },
-    { id: 'diffract', label: '16 回折（波動タンク）', scrub: false, period: tabPeriod, build: buildDiffract },
-    { id: 'interfere', label: '17 干渉', period: tabPeriod, build: buildInterfere }
+    { id: 'reflect', label: '14 反射', period: tabPeriod, build: buildReflect },
+    { id: 'refract', label: '15 屈折', scrub: false, period: tabPeriod, build: buildRefract },
+    { id: 'refract2', label: '16 屈折の作図と全反射', period: tabPeriod, build: buildRefract2 },
+    { id: 'diffract', label: '17 回折（波動タンク）', scrub: false, period: tabPeriod, build: buildDiffract },
+    { id: 'interfere', label: '18 干渉', period: tabPeriod, build: buildInterfere }
   ]
 });
 })();
