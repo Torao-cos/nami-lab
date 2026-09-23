@@ -92,7 +92,7 @@ function check(name, ok, detail = '') {
   // パルスに戻して作図ステップ②
   await page.evaluate(() => window.__nami_debug.reflect.setShape('p:saw'));
   await page.evaluate(() => { const b = [...document.querySelectorAll('.view.show .controls button')].find(x => x.textContent.includes('② 反射波')); b.click(); });
-  await page.evaluate(() => { const v = document.querySelector('.view.show'); v.querySelectorAll('.timebar input[type=range]')[0].value = 6.0; v.querySelectorAll('.timebar input[type=range]')[0].dispatchEvent(new Event('input')); });
+  await page.evaluate(() => { const v = document.querySelector('.view.show'); v.querySelectorAll('.timebar input[type=range]')[0].value = 5.6; v.querySelectorAll('.timebar input[type=range]')[0].dispatchEvent(new Event('input')); });
   await page.waitForTimeout(400);
   const stepOn = await page.evaluate(() => [...document.querySelectorAll('.view.show .controls button')].filter(b => b.classList.contains('active')).map(b => b.textContent));
   check('作図ステップ②が選択状態', stepOn.some(s => s.includes('② 反射波')), stepOn.join(','));
@@ -192,7 +192,7 @@ function check(name, ok, detail = '') {
   await page.waitForTimeout(400);
   const drawn = await page.evaluate(() => {
     const o = document.querySelector('.view.show .overlay').textContent;
-    const sel = document.querySelector('.view.show select');
+    const sel = document.querySelector('.view.show .controls select');
     return { o, v: sel.value };
   });
   check('描画終了で描画モードを抜ける', drawn.o === '', JSON.stringify(drawn));

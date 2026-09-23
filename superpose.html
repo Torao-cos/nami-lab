@@ -58,7 +58,8 @@ function buildFree(pts) {
     const den = Math.max(1e-12, xs[j + 1] - xs[j]);
     s[i] = ys[j] + (ys[j + 1] - ys[j]) * clamp((xq - xs[j]) / den, 0, 1);
   }
-  s[0] = 0; s[N - 1] = 0;
+  const e0 = s[0], e1 = s[N - 1];                     // 両端を0につなぐ（段差を直線で除く＝端のトゲを防ぐ）
+  for (let i = 0; i < N; i++) s[i] -= e0 + (e1 - e0) * i / (N - 1);
   for (let pass = 0; pass < 2; pass++) {            // 移動平均3点（軽く2回）
     const src = s.slice();
     for (let i = 1; i < N - 1; i++) s[i] = (src[i - 1] + src[i] + src[i + 1]) / 3;
@@ -198,13 +199,15 @@ function buildSuperpose(ctx) {
 
   return {
     draw(t) {
-      cv.clear(); cv.setView(V);
-      cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1, yStep: 1 });
+      const yM = Math.max(1.3, (Math.abs(w1.prm().A) + Math.abs(w2.prm().A)) * 1.25);
+      cv.clear(); cv.setView({ x0: V.x0, x1: V.x1, y0: -yM, y1: yM });
+      cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1 });
       const y1 = w1.y(), y2 = w2.y();
       cv.clip(() => {
+        // 合成波を下に、成分波（破線）を上に重ねる
+        if (tS.get()) cv.plot(x => y1(x, t) + y2(x, t), { color: C.wave, width: 4.0 });
         if (t1.get()) cv.plot(x => y1(x, t), { color: C.wave1, width: 2.2, dash: [7, 4] });
         if (t2.get()) cv.plot(x => y2(x, t), { color: C.wave2, width: 2.2, dash: [7, 4] });
-        if (tS.get()) cv.plot(x => y1(x, t) + y2(x, t), { color: C.wave, width: 3.4 });
         w1.P.drawLive(cv); w2.P.drawLive(cv);
       });
       // 最大変位の読み
@@ -225,7 +228,7 @@ function buildReflect(ctx) {
   const V = { x0: -0.5, x1: 11.0, y0: -2.6, y1: 2.6 };
   let step = 3;
 
-  const inc = makeWaveCtl(ctx, ctx.controls, { label: '入射波（右へ）', color: C.wave1, shape: 'p:saw', A: 1.0, w: 1.5, lam: 2.0, v: 1.0, dir: +1, x0: 1.0, getCv: () => cvF });
+  const inc = makeWaveCtl(ctx, ctx.controls, { label: '入射波（右へ）', color: C.wave1, shape: 'p:saw', A: 1.0, w: 1.5, lam: 2.0, v: 1.0, dir: +1, x0: 3.0, getCv: () => cvF });
   ui.sep(ctx.controls);
   const stepBtns = ui.buttons(ctx.controls, '作図ステップ', [
     { label: '0 入射波', onClick: () => setStep(0) },
@@ -263,6 +266,11 @@ function buildReflect(ctx) {
     shadeRight(cv, L);
     cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1, yStep: 1 });
     cv.clip(() => {
+      // ③ 合成波（下に敷く）
+      if (step >= 3 && tS.get()) {
+        cv.plot(x => ySum(end, x, t), { color: C.wave, width: 4.2, x0: V.x0, x1: L });
+        cv.plot(x => ySum(end, x, t), { color: C.wave, width: 2.0, alpha: 0.3, x0: L, x1: V.x1 });
+      }
       // ① 入射波
       if (tI.get()) {
         cv.plot(x => yi(x, t), { color: C.wave1, width: 2.6, dash: [7, 4], x0: V.x0, x1: L });
@@ -272,19 +280,14 @@ function buildReflect(ctx) {
       if (step >= 2 && tR.get()) {
         cv.plot(x => s * yi(2 * L - x, t), { color: C.wave2, width: 2.6, dash: [7, 4], x0: V.x0, x1: L });
         cv.plot(x => s * yi(x, t), { color: C.wave2, width: 2.0, dash: [3, 3], alpha: 0.35, x0: L, x1: V.x1 });
-        // 折り返しの矢印
-        let xp = null, best = 0;
+        // 折り返しの矢印（作図の意味が出るパルスのときだけ）
+        let xp = null, best = inc.P.isPulse() ? 0 : Infinity;
         for (let x = L + 0.05; x <= V.x1; x += 0.05) { const v = Math.abs(s * yi(x, t)); if (v > best) { best = v; xp = x; } }
         if (xp != null && best > 0.08) {
           const yv = s * yi(xp, t);
           cv.arrow(xp, yv, 2 * L - xp, yv, { color: C.wave2, alpha: 0.85, width: 1.6, head: 9 });
           cv.text('折り返す', L, yv + (yv >= 0 ? 0.34 : -0.34), { color: C.wave2, size: 12, bold: true });
         }
-      }
-      // ③ 合成波
-      if (step >= 3 && tS.get()) {
-        cv.plot(x => ySum(end, x, t), { color: C.wave, width: 3.6, x0: V.x0, x1: L });
-        cv.plot(x => ySum(end, x, t), { color: C.wave, width: 2.0, alpha: 0.3, x0: L, x1: V.x1 });
       }
     });
     // 壁
@@ -386,6 +389,7 @@ function buildStanding(ctx) {
     align: () => { v2.set(v1.get()); a2.set(a1.get()); f2.set(f1.get()); },
     mode: v => mode.set(v),
     setEnd: v => endSel.set(v),
+    ySum2: (x, t) => Ys2(x, t), yi2: (x, t) => Yi2(x, t), wallL: L,
     yWall2: t => Ys2(L, t)
   };
 
@@ -399,9 +403,9 @@ function buildStanding(ctx) {
         cv.plot(x => 2 * A * Math.cos(TAU * x / lam), { color: C.guide, width: 1.6, dash: [5, 5], alpha: .75 });
         cv.plot(x => -2 * A * Math.cos(TAU * x / lam), { color: C.guide, width: 1.6, dash: [5, 5], alpha: .75 });
       }
+      if (tS.get()) cv.plot(x => Y1(x, t) + Y2(x, t), { color: C.wave, width: 4.0 });
       if (t1.get()) cv.plot(x => Y1(x, t), { color: C.wave1, width: 2.0, dash: [7, 4] });
       if (t2.get()) cv.plot(x => Y2(x, t), { color: C.wave2, width: 2.0, dash: [7, 4] });
-      if (tS.get()) cv.plot(x => Y1(x, t) + Y2(x, t), { color: C.wave, width: 3.4 });
       if (ok && tM.get()) {
         for (let x = lam / 4; x <= V.x1; x += lam / 2) { cv.dot(x, 0, 6, { color: '#0b1510', stroke: C.node, width: 2.5 }); }
         for (let x = 0; x <= V.x1; x += lam / 2) {
@@ -432,12 +436,12 @@ function buildStanding(ctx) {
     shadeRight(cv, L);
     cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1, yStep: 1 });
     cv.clip(() => {
+      if (tS2.get()) cv.plot(x => Ys2(x, t), { color: C.wave, width: 4.0, x0: V.x0, x1: L });
       if (tI2.get()) {
         cv.plot(x => Yi2(x, t), { color: C.wave1, width: 2.0, dash: [7, 4], x0: V.x0, x1: L });
         cv.plot(x => Yi2(x, t), { color: C.wave1, width: 1.6, dash: [7, 4], alpha: .3, x0: L, x1: V.x1 });
       }
       if (tR2.get()) cv.plot(x => s * Yi2(2 * L - x, t), { color: C.wave2, width: 2.0, dash: [7, 4], x0: V.x0, x1: L });
-      if (tS2.get()) cv.plot(x => Ys2(x, t), { color: C.wave, width: 3.4, x0: V.x0, x1: L });
       const envF = end === 'free' ? Math.cos : Math.sin;   // 自由端は壁が腹 → cos 型の包絡線
       cv.plot(x => 2 * A * Math.abs(envF(TAU * (L - x) / lam)), { color: C.guide, width: 1.4, dash: [5, 5], alpha: .55, x0: V.x0, x1: L });
       cv.plot(x => -2 * A * Math.abs(envF(TAU * (L - x) / lam)), { color: C.guide, width: 1.4, dash: [5, 5], alpha: .55, x0: V.x0, x1: L });
