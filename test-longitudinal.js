@@ -161,6 +161,25 @@ function check(name, ok, detail = '') {
   check('計算値と教科書値のずれの理由が画面にある', /103/.test(whyTxt) && /回折/.test(whyTxt) && /波線/.test(whyTxt),
     whyTxt.slice(0, 80) + '…');
   check('計算値そのものが理由の文中に出る', sh ? whyTxt.includes(sh.pStart.toFixed(1)) : false);
+  // 波線を1本も途中で捨てていないこと（P は必ず地表へ／S は地表か外核境界で終わる）
+  const rays = await page.evaluate(() => window.__nami_debug.rays);
+  const pBad = rays.P.filter(r => r.end !== 'surface');
+  const sBad = rays.S.filter(r => r.end !== 'surface' && r.end !== 'cmb');
+  check('P の波線がすべて地表まで届く（途中で消えない）', pBad.length === 0, `本数=${rays.P.length} 例外=${JSON.stringify(pBad)}`);
+  check('S の波線は地表か外核境界でだけ終わる', sBad.length === 0, `本数=${rays.S.length} 例外=${JSON.stringify(sBad)}`);
+  check('内核を通る P（PKIKP・PKiKP）も描いている', rays.P.some(r => r.inner), `内核を通る波線=${rays.P.filter(r => r.inner).length} 本`);
+  // 帯と波線の到達点が画面上で矛盾しないこと（弱い P 以外は帯の中に落ちない）
+  if (sh) {
+    const inBandP = rays.P.filter(r => r.end === 'surface' && !r.inner && r.d > sh.pStart + 1e-6 && r.d < sh.pEnd - 1e-6);
+    const inBandS = rays.S.filter(r => r.end === 'surface' && r.d > sh.sStart + 1e-6);
+    check('P の帯の中に「弱い P」以外の到達点がない', inBandP.length === 0, JSON.stringify(inBandP.map(r => +r.d.toFixed(1))));
+    check('S の帯の中に S の到達点がない', inBandS.length === 0, JSON.stringify(inBandS.map(r => +r.d.toFixed(1))));
+  }
+  // 文言
+  const seisTxt = await page.locator('.view.show').first().innerText();
+  check('「地震発生からの時間」の表現になっている', /地震発生からの時間/.test(seisTxt) && !/地震の時刻/.test(seisTxt));
+  check('再生速度が「画面の1秒＝実際の○秒」で説明されている', /再生速度/.test(seisTxt) && /画面の1秒＝実際の60秒/.test(seisTxt));
+
   const obs = await page.locator('.view.show .controls .readout').nth(1).textContent();
   check('観測点の読み出しに Δ と P・S 到達が出る', /Δ =/.test(obs) && /P到達/.test(obs), obs);
   const ps = await page.locator('.view.show .controls .readout').nth(2).textContent();
@@ -176,7 +195,8 @@ function check(name, ok, detail = '') {
   await page.click('.view.show .timebar button:nth-child(3)');          // ▶ コマ送り
   await page.waitForTimeout(200);
   const tFwd = parseFloat((await tv()).replace(/[^0-9.]/g, ''));
-  check('タブ7 コマ送り ▶ が T/12 = 5 s 進む', Math.abs(tFwd - (parseFloat(tStop.replace(/[^0-9.]/g, '')) + 5)) < 0.01, `${tStop} → ${tFwd}`);
+  // 既定の再生速度 ×60 では period = 1800/60 = 30 s → 1コマ = 2.5 s（地震の時刻で 150 s）
+  check('タブ7 コマ送り ▶ が period/12 = 2.5 s 進む', Math.abs(tFwd - (parseFloat(tStop.replace(/[^0-9.]/g, '')) + 2.5)) < 0.01, `${tStop} → ${tFwd}`);
   await page.click('.view.show .timebar button:nth-child(2)');          // ◀
   await page.waitForTimeout(200);
   check('タブ7 コマ送り ◀ で元に戻る', (await tv()) === tStop, `${tStop} vs ${await tv()}`);
@@ -191,9 +211,9 @@ function check(name, ok, detail = '') {
   await page.selectOption('.view.show .timebar select', '1');
   // 時間スクラブ（停止して過去の時刻へ）
   await page.click('.view.show .timebar button:nth-child(1)');
-  await page.evaluate(() => { const r = document.querySelector('.view.show .timebar input[type=range]'); r.value = 8; r.dispatchEvent(new Event('input', { bubbles: true })); });
+  await page.evaluate(() => { const r = document.querySelector('.view.show .timebar input[type=range]'); r.value = 5; r.dispatchEvent(new Event('input', { bubbles: true })); });
   await page.waitForTimeout(300);
-  check('タブ7 時間スクラブで任意時刻へ', /8\.0/.test(await tv()), await tv());
+  check('タブ7 時間スクラブで任意時刻へ', /5\.0/.test(await tv()), await tv());
   await page.evaluate(() => { const r = document.querySelector('.view.show .timebar input[type=range]'); r.value = 3; r.dispatchEvent(new Event('input', { bubbles: true })); });
   await page.waitForTimeout(300);
   check('タブ7 過去へ戻れる', /3\.0/.test(await tv()), await tv());
@@ -204,6 +224,17 @@ function check(name, ok, detail = '') {
   await page.waitForTimeout(700);
   const tb = await page.locator('.view.show .tval').textContent();
   check('タブ7でアニメーションが進む', ta !== tb, `${ta} → ${tb}`);
+
+  // 再生速度（既定 ×60／最大 ×600。速度を変えても「地震発生からの時間」は保たれる）
+  await page.click('.view.show .timebar button:nth-child(1)');
+  await page.waitForTimeout(200);
+  const tB = parseFloat((await tv()).replace(/[^0-9.]/g, ''));
+  await page.evaluate(() => { const rs = [...document.querySelectorAll('.view.show .controls:not(.detail) input[type=range]')]; const r = rs[1]; r.value = 3; r.dispatchEvent(new Event('input', { bubbles: true })); });
+  await page.waitForTimeout(300);
+  const tA = parseFloat((await tv()).replace(/[^0-9.]/g, ''));
+  check('再生速度 ×60→×600 で地震発生からの時間が保たれる', Math.abs(tA - tB / 10) < 0.02, `t: ${tB} → ${tA}`);
+  const spTxt = await page.locator('.view.show .controls:not(.detail)').first().innerText();
+  check('再生速度の最大が ×600（意味つき表示）', /×600（画面の1秒＝実際の600秒）/.test(spTxt), spTxt.slice(0, 60));
 
   await page.close();
 
