@@ -7,7 +7,10 @@
   .controls .formula em{font-style:normal;color:var(--muted);font-size:.85em}
   .controls .formula .bad{color:var(--red);font-weight:700}
   .controls .note b{color:var(--green);font-weight:700}
-  @media (max-width:760px){ .panel{min-height:300px} }
+  .timebar button[disabled]{opacity:.38;cursor:not-allowed}
+  /* 干渉タブ: 上面図（広）＋ 点Pの y-t（細） */
+  .stage.stageIF{grid-template-columns:2fr 1fr}
+  @media (max-width:760px){ .panel{min-height:300px} .stage.stageIF{grid-template-columns:1fr} }
 </style>
 </head><body>
 <script src="common.js"></script>
@@ -68,7 +71,7 @@ function note(parent, html) { const n = ui.note(parent, ''); n.innerHTML = html;
 function fillRectPx(cv, X, Y, W, H, color) { const g = cv.ctx; g.save(); g.fillStyle = color; g.fillRect(X, Y, W, H); g.restore(); }
 
 /* =========================================================
-   E-12 素元波（ホイヘンスの原理）
+   E-13 素元波（ホイヘンスの原理）
    ========================================================= */
 function buildHuygens(ctx) {
   const cv = ctx.canvas({ title: '上から見た水面 — 波面上の各点から素元波（灰）／その包絡線が次の波面（緑）' });
@@ -181,11 +184,11 @@ function buildHuygens(ctx) {
 }
 
 /* =========================================================
-   E-12b 屈折
+   E-14 屈折
    ========================================================= */
 function buildRefract(ctx) {
   const cv = ctx.canvas({ title: '境界での屈折 — 境界上の各点から出た素元波（媒質2）の包絡線が屈折波面' });
-  const st = { v1: 1.5, v2: 1.0, i: 50, n: 6, wavelet: true, env: true, ray: true, anim: true, T: 2 };
+  const st = { v1: 1.5, v2: 1.0, i: 50, n: 6, wavelet: true, env: true, ray: true, anim: true, len: true, T: 2 };
 
   ui.slider(ctx.controls, { label: '媒質1の速さ v₁', min: 0.5, max: 2, step: 0.05, value: 1.5, unit: 'm/s', onInput: v => st.v1 = v });
   ui.slider(ctx.controls, { label: '媒質2の速さ v₂', min: 0.5, max: 2, step: 0.05, value: 1.0, unit: 'm/s', onInput: v => st.v2 = v });
@@ -194,12 +197,14 @@ function buildRefract(ctx) {
   ui.toggle(ctx.controls, { label: '素元波', checked: true, onChange: v => st.wavelet = v });
   ui.toggle(ctx.controls, { label: '包絡線（屈折波面）', checked: true, onChange: v => st.env = v });
   ui.toggle(ctx.controls, { label: '射線・法線・角', checked: true, onChange: v => st.ray = v });
+  ui.toggle(ctx.controls, { label: "作図の長さ BB′・AT", checked: true, onChange: v => st.len = v });
   ui.toggle(ctx.controls, { label: '波面アニメーション', checked: true, onChange: v => st.anim = v });
   const F = ui.formula(ctx.controls, '');
-  note(ctx.controls, '入射波面の端が A に着いてから、もう一方の端が B に着くまでの間に、A から出た素元波は媒質2を r = v₂t だけ広がる。<b>入射波面のハンドル（黄）をドラッグ</b>しても入射角を変えられる。');
+  note(ctx.controls, "入射波面の端 A がすでに境界に着いてから、もう一方の端 B が境界の B′ に着くまでの時間を Δt とする。その Δt の間に、<b>B は媒質1を BB′ = v₁Δt だけ進み</b>、<b>A から出た素元波は媒質2を半径 AT = v₂Δt だけ広がる</b>。直角三角形 ABB′ と ATB′ は斜辺 AB′ が共通だから、sin i = BB′/AB′・sin r = AT/AB′ となり、比をとると AB′ が消えて sin i / sin r = v₁/v₂ になる。<b>入射波面のハンドル（黄）をドラッグ</b>しても入射角を変えられる。");
   ui.slider(ctx.detail, { label: '素元波の数', min: 4, max: 8, step: 1, value: 6, digits: 0, onInput: v => st.n = v });
   ui.slider(ctx.detail, { label: 'T（周期）', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
   note(ctx.detail, '波面アニメーションは λ₁ = v₁T、λ₂ = v₂T の間隔で山の線を描いている。境界で山の線がつながる（位相が連続）ことに注目。');
+  note(ctx.detail, '<b>発展（物理基礎の範囲外）</b>：v₂ &gt; v₁ のとき、入射角を大きくしていくと (v₂/v₁) sin i が 1 を超え、sin r = (v₂/v₁) sin i をみたす角 r が存在しなくなる。ちょうど 1 になる入射角を<b>臨界角</b>、それより大きい角で屈折波が出ない現象を<b>全反射</b>という。');
 
   // ジオメトリ（draw で更新）
   const G = { D: 3, A: { x: -1.5, y: 0 }, hlen: 1.5 };
@@ -255,9 +260,12 @@ function buildRefract(ctx) {
       cv.text('媒質1　v₁ = ' + fmt(v1, 2) + ' m/s　λ₁ = ' + fmt(lam1, 2) + ' m', V.x0 + 0.15, V.y1, { dy: 14, align: 'left', color: C.wave1, bold: true });
       cv.text('媒質2　v₂ = ' + fmt(v2, 2) + ' m/s' + (total ? '' : '　λ₂ = ' + fmt(lam2, 2) + ' m'), V.x0 + 0.15, V.y0 * 0.62, { align: 'left', color: C.dens, bold: true });
 
+      // 作図の途中量: 入射波面の端 B が境界の B′ に着くまでの時間 Δt と、その間の BB′・AT
+      const BBp = D * si;                    // BB′ = v₁Δt（媒質1で端 B が進む距離）
+      const Tt = BBp / v1;                   // Δt（B→B′ の所要時間）
+      const AT = total ? 0 : D * Math.sin(rr); // AT = v₂Δt（同じ Δt に A から出た素元波の半径）
       const degen = si < 0.03;
       if (!degen) {
-        const Tt = D * si / v1;              // A→B' の所要時間
         const B = { x: A.x + u1.x * D * ci, y: A.y + u1.y * D * ci };
         // 素元波（媒質2側の半円）
         if (st.wavelet && !total) {
@@ -275,11 +283,25 @@ function buildRefract(ctx) {
         const segB = clipLine(u1.y, -u1.x, u1.y * Bp.x - u1.x * Bp.y, { x0: V.x0, x1: V.x1, y0: 0, y1: V.y1 });
         if (segB) cv.line(segB[0][0], segB[0][1], segB[1][0], segB[1][1], { color: C.wave1, width: 2, dash: [8, 6], alpha: .85 });
         cv.dot(Bp.x, 0, 4.5, { color: C.wave1 }); cv.text("B'", Bp.x, 0, { dy: 14, dx: 10, color: C.wave1, bold: true });
-        // 屈折波面（包絡線）
-        if (st.env && !total) {
-          const Tp = { x: Bp.x - u2.x * D * Math.cos(rr), y: Bp.y - u2.y * D * Math.cos(rr) };
+        // 屈折波面（包絡線）— T は素元波（半径 AT）との接点
+        const Tp = total ? null : { x: Bp.x - u2.x * D * Math.cos(rr), y: Bp.y - u2.y * D * Math.cos(rr) };
+        if (st.env && Tp) {
           cv.line(Bp.x, Bp.y, Tp.x, Tp.y, { color: C.wave, width: 3 });
           cv.text('屈折波面', (Bp.x + Tp.x) / 2, (Bp.y + Tp.y) / 2, { dy: 14, dx: 18, color: C.wave, bold: true });
+        }
+        // 作図の途中量（長さ）: AB′（共通の斜辺）・BB′ = v₁Δt（青）・AT = v₂Δt（緑）
+        if (st.len) {
+          cv.line(A.x, A.y, Bp.x, Bp.y, { color: hexA(C.muted, .8), width: 1.5, dash: [6, 5] });
+          cv.text("AB′ = " + fmt(D, 2) + ' m', (A.x + Bp.x) / 2, 0, { dy: -11, color: C.muted });
+          cv.line(B.x, B.y, Bp.x, Bp.y, { color: C.wave1, width: 4.5, alpha: .95 });
+          cv.text("BB′ = v₁Δt = " + fmt(BBp, 2) + ' m', (B.x + Bp.x) / 2, (B.y + Bp.y) / 2, { dx: 9, dy: -6, align: 'left', color: C.wave1, bold: true });
+          if (Tp) {
+            cv.line(A.x, A.y, Tp.x, Tp.y, { color: C.wave, width: 4.5, alpha: .95 });
+            cv.dot(Tp.x, Tp.y, 4.5, { color: C.wave });
+            cv.text('T', Tp.x, Tp.y, { dx: -13, dy: 9, color: C.wave, bold: true });
+            // 角 r の円弧（A まわり 44px）を避けて、T 寄りにラベルを置く
+            cv.text('AT = v₂Δt = ' + fmt(AT, 2) + ' m', A.x + (Tp.x - A.x) * 0.78, A.y + (Tp.y - A.y) * 0.78, { dx: -10, dy: 12, align: 'right', color: C.wave, bold: true });
+          }
         }
         // 射線・法線・角
         if (st.ray) {
@@ -295,20 +317,32 @@ function buildRefract(ctx) {
             cv.textPx('r = ' + fmt(rr * R2D, 1) + '°', cv.px(A.x) + 58 * Math.cos(Math.PI / 2 - rr / 2), cv.py(A.y) + 58 * Math.sin(Math.PI / 2 - rr / 2), { color: C.wave, bold: true });
           }
         }
-        if (total) cv.text('屈折波なし（全反射）', (A.x + Bp.x) / 2, V.y0 * 0.55, { color: C.wave2, bold: true, size: 17 });
+        if (total) cv.text(ctx.detail.hidden ? '屈折波なし' : '屈折波なし（全反射）', (A.x + Bp.x) / 2, V.y0 * 0.55, { color: C.wave2, bold: true, size: 17 });
       } else {
         cv.text('入射角 0°（垂直入射）— 波面は境界に平行で、進む向きは変わらない', 0, V.y0 * 0.55, { color: C.muted, bold: true, size: 15 });
       }
       cv.drawHandles();
 
-      // 読み出し
+      // 読み出し（作図の途中量 → 式 の順に出す）
+      const showDetail = !ctx.detail.hidden;
       if (total) {
-        F.set('sin i / sin r：<span class="bad">屈折波なし（全反射）</span>　'
-          + 'sin r = (v₂/v₁) sin i = ' + fmt(v2 / v1, 2) + ' × ' + fmt(si, 3) + ' = ' + fmt(sr, 3) + ' &gt; 1　'
-          + '<em>臨界角 = ' + fmt(Math.asin(clamp(v1 / v2, -1, 1)) * R2D, 1) + '°</em>');
+        F.set('sin r = (v₂/v₁) sin i = ' + fmt(v2 / v1, 2) + ' × ' + fmt(si, 3) + ' = ' + fmt(sr, 3) + ' &gt; 1'
+          + '<br>sin r が 1 を超える角 r は存在しない　→　<span class="bad">屈折波なし</span>'
+          + (showDetail
+            ? '<br><em>（発展）この現象を全反射という。sin r = 1 になる入射角＝臨界角 = ' + fmt(Math.asin(clamp(v1 / v2, -1, 1)) * R2D, 1) + '°</em>'
+            : ''));
       } else {
         const n12 = si < 1e-6 ? v1 / v2 : si / Math.sin(rr);
-        F.set('sin i / sin r = sin ' + fmt(st.i, 0) + '° / sin ' + fmt(rr * R2D, 1) + '° = ' + fmt(si, 3) + ' / ' + fmt(Math.sin(rr), 3) + ' = <b>' + fmt(n12, 3) + '</b>'
+        const step1 = si < 1e-6
+          ? '入射角 0°：BB′ = 0、AT = 0（波面は境界に平行なので、進む向きは変わらない）'
+          : "Δt（B が B′ に着くまで）= BB′/v₁ = " + fmt(Tt, 2) + ' s　→　'
+            + "BB′ = v₁Δt = " + fmt(v1, 2) + ' × ' + fmt(Tt, 2) + ' = ' + fmt(BBp, 2) + ' m　／　'
+            + 'AT = v₂Δt = ' + fmt(v2, 2) + ' × ' + fmt(Tt, 2) + ' = ' + fmt(AT, 2) + ' m　／　'
+            + "AB′ = " + fmt(D, 2) + ' m（共通の斜辺）';
+        const step2 = "sin i = BB′/AB′ = v₁Δt/AB′ = " + fmt(BBp, 2) + ' / ' + fmt(D, 2) + ' = ' + fmt(si, 3)
+          + "　　sin r = AT/AB′ = v₂Δt/AB′ = " + fmt(AT, 2) + ' / ' + fmt(D, 2) + ' = ' + fmt(Math.sin(rr), 3);
+        F.set(step1 + '<br>' + step2
+          + "<br>sin i / sin r = (v₁Δt/AB′) / (v₂Δt/AB′) = " + fmt(si, 3) + ' / ' + fmt(Math.sin(rr), 3) + ' = <b>' + fmt(n12, 3) + '</b>'
           + '　＝　v₁/v₂ = ' + fmt(v1, 2) + ' / ' + fmt(v2, 2) + ' = <b>' + fmt(v1 / v2, 3) + '</b>'
           + '　＝　λ₁/λ₂ = ' + fmt(lam1, 2) + ' / ' + fmt(lam2, 2) + ' = <b>' + fmt(lam1 / lam2, 3) + '</b>'
           + '　＝　n₁₂');
@@ -319,11 +353,13 @@ function buildRefract(ctx) {
 }
 
 /* =========================================================
-   E-12c 回折（2次元波動タンク・FDTD）
+   E-15 回折（2次元波動タンク・FDTD）
    ========================================================= */
 function buildDiffract(ctx) {
   const cv = ctx.canvas({ title: '2次元 波動タンク（数値計算）— 左から平面波／中央の障壁とスリット' });
-  const st = { preset: 'single', w: 24, lam: 12, sep: 40, gain: 2.2 };
+  // v＝クーラン数 s = v·dt/dx（セル/ステップ）、Tst＝波源の周期（ステップ）、λ = v·Tst（セル）は導出量
+  const st = { preset: 'single', w: 24, v: 0.5, Tst: 24, sep: 40, gain: 2.2 };
+  const lamOf = () => st.v * st.Tst;
 
   ui.select(ctx.controls, {
     label: 'プリセット', value: 'single',
@@ -331,15 +367,24 @@ function buildDiffract(ctx) {
     onChange: v => { st.preset = v; buildWall(); }
   });
   ui.slider(ctx.controls, { label: 'スリット幅 w', min: 2, max: 60, step: 1, value: 24, digits: 0, unit: 'セル', onInput: v => { st.w = v; buildWall(); } });
-  ui.slider(ctx.controls, { label: '波長 λ', min: 4, max: 30, step: 1, value: 12, digits: 0, unit: 'セル', onInput: v => st.lam = v });
+  ui.slider(ctx.controls, { label: '波の速さ v', min: 0.15, max: 0.5, step: 0.01, value: 0.5, digits: 2, unit: 'セル/ステップ', onInput: v => { st.v = v; RL.set(fmt(lamOf(), 1) + ' セル'); RO.set(fmt(st.w / lamOf(), 2)); } });
+  ui.slider(ctx.controls, { label: '波源の周期 T', min: 10, max: 60, step: 1, value: 24, digits: 0, unit: 'ステップ', onInput: v => { st.Tst = v; RL.set(fmt(lamOf(), 1) + ' セル'); RO.set(fmt(st.w / lamOf(), 2)); } });
   const sSep = ui.slider(ctx.controls, { label: 'スリット間隔 d', min: 12, max: 70, step: 1, value: 40, digits: 0, unit: 'セル', onInput: v => { st.sep = v; buildWall(); } });
   ui.slider(ctx.controls, { label: '明るさ', min: 1, max: 6, step: 0.1, value: 2.2, digits: 1, onInput: v => st.gain = v });
+  const RL = ui.readout(ctx.controls, { label: 'λ = vT', value: '' });
   const RO = ui.readout(ctx.controls, { label: 'w / λ', value: '' });
-  note(ctx.controls, '<b>作図＝手順（「12 素元波」タブ）／タンク＝現象（このタブ）</b>。スリットが波長に比べて狭い（w ≲ λ）ほど、波はスリットの後ろへ大きく回り込む。時間を巻き戻すことはできない（停止・再開・スロー・リセットのみ）。');
-  note(ctx.detail, '2次元波動方程式 ∂²u/∂t² = c²∇²u を差分法（クーラン数 0.5）で解いている。画面の端は吸収層（反射させない）。障壁は変位 0 の固い壁。');
+  note(ctx.controls, '<b>作図＝手順（「13 素元波」タブ）／タンク＝現象（このタブ）</b>。スリットが波長に比べて狭い（w ≲ λ）ほど、波はスリットの後ろへ大きく回り込む。');
+  note(ctx.controls, '<b>波長 λ は直接は決められない。</b>決められるのは波源の周期 T（＝振動数 f = 1/T）と媒質で決まる速さ v で、λ = vT はその結果。<b>T を固定したまま v を変えると、f はそのままで λ だけが変わる</b>（波源の振動が速さを決めるのではない）。');
+  note(ctx.controls, '<b>1セル＝格子の1目盛り</b>。実際の長さではなく、λ とスリット幅 w の<b>比</b>だけが現象を決める。');
+  note(ctx.controls, 'このタブは各時刻の場を1ステップずつ積み上げて計算しているので、<b>時間を巻き戻すことはできない</b>（◀ は使えない。停止・再開・スロー・リセット・▶ のみ）。');
+  note(ctx.detail, '2次元波動方程式 ∂²u/∂t² = c²∇²u を差分法で解いている。スライダーの「速さ v」は差分法のクーラン数 s = v·dt/dx そのもの（dx = 1セル、dt = 1ステップ）。この解き方が安定なのは s ≤ 1/√2 ≒ 0.71 のときなので、上限を 0.5 にしてある。画面の端は吸収層（反射させない）。障壁は変位 0 の固い壁。');
+
+  // コマ戻し ◀ は無効（場は1ステップずつ積み上げる＝過去の場を持っていない）
+  ctx.sim.stepBack.disabled = true;
+  ctx.sim.stepBack.title = '回折は時間を戻せません（場を1ステップずつ積み上げる数値計算のため）';
 
   // --- 格子 ---
-  let nx = 0, ny = 0, u, up, un, wall, sig, off, offg, img, step = 0, acc = 0, phase = 0;
+  let nx = 0, ny = 0, u, up, un, wall, sig, off, offg, img, step = 0, acc = 0, phase = 0, lastT = 0;
   function alloc(_nx, _ny) {
     nx = _nx; ny = _ny; const n = nx * ny;
     u = new Float32Array(n); up = new Float32Array(n); un = new Float32Array(n);
@@ -373,8 +418,10 @@ function buildDiffract(ctx) {
   }
   function clearField() { if (u) { u.fill(0); up.fill(0); un.fill(0); } step = 0; acc = 0; phase = 0; }
 
-  const Cc = 0.5, C2 = Cc * Cc, SRC = 16;
+  const SRC = 16;
   function advance(n) {
+    const C2 = st.v * st.v;               // クーラン数の2乗（v はセル/ステップ）
+    const sgK = st.v / 0.5;               // 吸収層の強さは速さに比例させる（v を下げても端で反射させない）
     for (let s = 0; s < n; s++) {
       for (let j = 1; j < ny - 1; j++) {
         const row = j * nx;
@@ -382,15 +429,15 @@ function buildDiffract(ctx) {
           const k = row + i2;
           if (wall[k]) { un[k] = 0; continue; }
           const lap = u[k + 1] + u[k - 1] + u[k + nx] + u[k - nx] - 4 * u[k];
-          const sg = sig[k];
+          const sg = sig[k] * sgK;
           un[k] = (2 * u[k] - (1 - sg) * up[k] + C2 * lap) / (1 + sg);
         }
       }
       for (let i2 = 0; i2 < nx; i2++) { un[i2] = 0; un[(ny - 1) * nx + i2] = 0; }
       for (let j = 0; j < ny; j++) { un[j * nx] = 0; un[j * nx + nx - 1] = 0; }
-      // 平面波源（左側の列）: λ を変えても位相は連続
-      phase += Cc / st.lam;
-      const amp = Math.min(1, step * Cc / (2 * st.lam));
+      // 平面波源（左側の列）: 周期 T ステップで振動。v や T を変えても位相は連続
+      phase += 1 / st.Tst;
+      const amp = Math.min(1, step / (2 * st.Tst));
       const sv = amp * sinT(phase);
       for (let j = 1; j < ny - 1; j++) un[j * nx + SRC] = sv;
       const tmp = up; up = u; u = un; un = tmp;
@@ -413,6 +460,7 @@ function buildDiffract(ctx) {
   return {
     draw(t, dt, running) {
       mark('diffract');
+      lastT = t;
       cv.setPad({ l: 8, r: 8, t: 8, b: 8 });
       const aspect = cv.iw / Math.max(1, cv.ih);
       const budget = 26000;
@@ -424,15 +472,18 @@ function buildDiffract(ctx) {
       render();
       const g = cv.ctx; g.save(); g.imageSmoothingEnabled = true;
       g.drawImage(off, cv.pad.l, cv.pad.t, cv.iw, cv.ih); g.restore();
-      // 注記
-      const cell = cv.iw / nx;
-      cv.textPx('λ = ' + (st.lam | 0) + ' セル　スリット幅 w = ' + (st.w | 0) + ' セル　→　w/λ = ' + fmt(st.w / st.lam, 2)
-        + '　（格子 ' + nx + '×' + ny + '）', cv.pad.l + 8, cv.pad.t + 12, { align: 'left', color: C.muted, size: 12 });
+      // 注記（v・T（f）・λ = vT を同時に出す）
+      const cell = cv.iw / nx, lam = lamOf();
+      cv.textPx('v = ' + fmt(st.v, 2) + ' セル/ステップ　　T = ' + (st.Tst | 0) + ' ステップ（f = 1/T = ' + fmt(1 / st.Tst, 3) + ' /ステップ）'
+        + '　　λ = vT = ' + fmt(st.v, 2) + ' × ' + (st.Tst | 0) + ' = ' + fmt(lam, 1) + ' セル',
+        cv.pad.l + 8, cv.pad.t + 12, { align: 'left', color: C.text, size: 12 });
+      cv.textPx('スリット幅 w = ' + (st.w | 0) + ' セル　→　w/λ = ' + fmt(st.w / lam, 2) + '　（格子 ' + nx + '×' + ny + '）',
+        cv.pad.l + 8, cv.pad.t + 30, { align: 'left', color: C.muted, size: 12 });
       // λ 目盛り
-      const x0 = cv.pad.l + cv.iw - 12 - st.lam * cell, yb = cv.pad.t + cv.ih - 14;
+      const x0 = cv.pad.l + cv.iw - 12 - lam * cell, yb = cv.pad.t + cv.ih - 14;
       g.save(); g.strokeStyle = C.yellow; g.lineWidth = 2; g.beginPath();
-      g.moveTo(x0, yb - 5); g.lineTo(x0, yb); g.lineTo(x0 + st.lam * cell, yb); g.lineTo(x0 + st.lam * cell, yb - 5); g.stroke(); g.restore();
-      cv.textPx('λ', x0 + st.lam * cell / 2, yb - 12, { color: C.yellow, bold: true, size: 12 });
+      g.moveTo(x0, yb - 5); g.lineTo(x0, yb); g.lineTo(x0 + lam * cell, yb); g.lineTo(x0 + lam * cell, yb - 5); g.stroke(); g.restore();
+      cv.textPx(lam * cell > 58 ? 'λ = vT' : 'λ', x0 + lam * cell / 2, yb - 12, { color: C.yellow, bold: true, size: 12 });
       sSep.box.style.display = st.preset === 'double' ? '' : 'none';
       DBG.probe = () => { // 検証用: 障壁の前後・軸外の振幅（rms）
         const bx = Math.round(nx * BXR), box = (i0, i1, j0, j1) => {
@@ -440,26 +491,36 @@ function buildDiffract(ctx) {
           for (let j = j0 | 0; j < (j1 | 0); j++) for (let i2 = i0 | 0; i2 < (i1 | 0); i2++) { const v = u[j * nx + i2]; s += v * v; c++; }
           return Math.sqrt(s / Math.max(1, c));
         };
+        // 入射側（障壁の手前）で実際の波長を測る: 符号反転の回数から λ ≈ 2L/(反転回数)
+        const j0 = (ny / 2) | 0, i0 = SRC + 8, i1 = Math.max(i0 + 8, bx - 6);
+        let flips = 0, prev = 0;
+        for (let i2 = i0; i2 < i1; i2++) { const v = u[j0 * nx + i2]; if (prev !== 0 && v * prev < 0) flips++; if (Math.abs(v) > 1e-6) prev = v; }
         return {
           front: box(SRC + 4, bx - 4, ny * 0.3, ny * 0.7),
           behindAxis: box(bx + 10, bx + 40, ny * 0.42, ny * 0.58),
           behindOff: box(bx + 10, bx + 40, ny * 0.05, ny * 0.25),
+          lamMeas: flips > 0 ? 2 * (i1 - i0) / flips : NaN,
+          lamSet: lamOf(), v: st.v, Tst: st.Tst,
           nx, ny, step
         };
       };
-      RO.set(fmt(st.w / st.lam, 2));
+      RL.set(fmt(lam, 1) + ' セル');
+      RO.set(fmt(st.w / lam, 2));
     },
     onReset() { clearField(); },
-    onStep(dir) { if (dir > 0) advance(25); },
+    // ◀（←キー）で t だけ戻って場が戻らない「空振り」を防ぐ: 後退は t も戻さない
+    onStep(dir) { if (dir > 0) advance(25); else ctx.sim.t = lastT; },
     period: () => 2
   };
 }
 
 /* =========================================================
-   E-I 干渉
+   E-16 干渉
    ========================================================= */
 function buildInterfere(ctx) {
+  ctx.stage.classList.add('stageIF');
   const cv = ctx.canvas({ title: '2点波源の干渉（上から見た水面）— P はドラッグできます' });
+  const cvP = ctx.canvas({ title: '点 P の y-t グラフ（P の水面の上下動）' });
   const st = { d: 3, lam: 2, T: 2, anti: false, lines: true, circles: false, gain: 1 };
   const P = { x: 2.4, y: 1.6 };
 
@@ -471,9 +532,11 @@ function buildInterfere(ctx) {
   ui.slider(ctx.controls, { label: 'λ', min: 0.6, max: 3, step: 0.1, value: 2, unit: 'm', digits: 1, onInput: v => st.lam = v });
   ui.slider(ctx.controls, { label: 'T', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
   const F = ui.formula(ctx.controls, '');
-  note(ctx.controls, '<b>実線同士／破線同士の交点＝強め合い、実線と破線の交点＝弱め合い。</b> 強め合いの点は黄の線（経路差 = mλ）、弱め合いの点は水色の破線（経路差 = (m+½)λ）の上に並ぶ。逆位相にすると役割が入れかわる。');
+  ui.legend(ctx.controls, [[C.anti, '水色の実線＝経路差 mλ の点'], [C.yellow, '黄の破線＝経路差 (m+½)λ の点']]);
+  note(ctx.controls, '<b>実線同士／破線同士の交点は、山と山・谷と谷が同時に来る点</b>（経路差 = mλ）。<b>実線と破線の交点は、一方の山ともう一方の谷が同時に来る点</b>（経路差 = (m+½)λ）。前者は右の y-t グラフで振幅 2A の大きな振動になり、後者はほとんど動かない。色は定在波タブと同じ意味で、<b style="color:#4dd0e1">水色＝大きく動く</b>・<b style="color:#ffd166">黄＝ほとんど動かない</b>。');
+  note(ctx.controls, '<b>逆位相</b>にすると、S₂ は S₁ が山を出す瞬間に谷を出す。そのため経路差 0 の点でも山と谷が重なり、2本の線の役割が入れかわる。');
   ui.slider(ctx.detail, { label: '明るさ', min: 0.5, max: 2.5, step: 0.1, value: 1, digits: 1, onInput: v => st.gain = v });
-  note(ctx.detail, 'y(x,y,t) = A sin2π(t/T − r₁/λ) + A sin(2π(t/T − r₂/λ) + φ) を各点で計算して濃淡で表示（振幅の減衰は考えない）。');
+  note(ctx.detail, 'y(x,y,t) = A sin2π(t/T − r₁/λ) + A sin(2π(t/T − r₂/λ) + φ) を各点で計算して濃淡で表示（振幅の減衰は考えない）。右の y-t グラフはこの式に P の座標を入れ、時刻 t の関数として描いたもの。だから P をドラッグすると波形がその場で描き直される。');
 
   cv.addHandle({ get: () => P, set: (x, y) => { P.x = x; P.y = y; }, color: C.yellow, label: 'P', r: 26, size: 8 });
 
@@ -551,8 +614,9 @@ function buildInterfere(ctx) {
           }
         };
         const M = Math.floor(d / lam) + 1;
-        const optCon = { color: C.yellow, width: 2, alpha: .95 };
-        const optDes = { color: C.anti, width: 2, alpha: .95, dash: [8, 6] };
+        // 大きく動く線＝水色の実線／ほとんど動かない線＝黄の破線（定在波タブの腹・節と同じ意味に揃える）
+        const optCon = { color: C.anti, width: 2.4, alpha: .95 };
+        const optDes = { color: C.yellow, width: 2, alpha: .95, dash: [8, 6] };
         for (let m = 0; m <= M; m++) {
           const k1 = m * lam, k2 = (m + 0.5) * lam;
           if (k1 < d) drawHyp(k1, st.anti ? optDes : optCon);
@@ -566,21 +630,31 @@ function buildInterfere(ctx) {
       cv.text('S₁', S1.x, S1.y, { dy: -18, color: C.wave2, bold: true, size: 15 });
       cv.text('S₂', S2.x, S2.y, { dy: -18, color: C.wave2, bold: true, size: 15 });
       cv.hbracket(S1.x, S2.x, V.y0 + (V.y1 - V.y0) * 0.09, 'd = ' + fmt(d, 1) + ' m', { below: true });
-      cv.line(S1.x, S1.y, P.x, P.y, { color: hexA(C.yellow, .55), width: 1.4, dash: [5, 5] });
-      cv.line(S2.x, S2.y, P.x, P.y, { color: hexA(C.yellow, .55), width: 1.4, dash: [5, 5] });
+      // S₁P・S₂P は作図補助線（灰）— 黄・水色は干渉の線の色なので使わない
+      cv.line(S1.x, S1.y, P.x, P.y, { color: hexA(C.guide, .8), width: 1.4, dash: [5, 5] });
+      cv.line(S2.x, S2.y, P.x, P.y, { color: hexA(C.guide, .8), width: 1.4, dash: [5, 5] });
       cv.drawHandles();
 
       // --- 読み出し ---
       DBG.P = P; DBG.st = st;
       DBG.toPage = (wx, wy) => { const r = cv.el.getBoundingClientRect(); return { x: r.left + cv.px(wx), y: r.top + cv.py(wy) }; };
       const r1 = Math.hypot(P.x - S1.x, P.y - S1.y), r2 = Math.hypot(P.x - S2.x, P.y - S2.y);
-      const dr = Math.abs(r1 - r2), q = dr / lam, near = q - Math.floor(q);
-      const isInt = Math.min(near, 1 - near) < 0.06, isHalf = Math.abs(near - 0.5) < 0.06;
-      const con = st.anti ? isHalf : isInt, des = st.anti ? isInt : isHalf;
-      const judge = con ? '<b>強め合い</b>' : des ? '<b style="color:#4dd0e1">弱め合い</b>' : '<em>中間</em>';
-      F.set('S₁P = ' + fmt(r1, 2) + ' m　S₂P = ' + fmt(r2, 2) + ' m　経路差 |S₁P−S₂P| = <b>' + fmt(dr, 2) + '</b> m = <b>'
-        + fmt(q, 2) + ' λ</b>　→　' + judge
-        + '　<em>（' + (st.anti ? '逆位相：(m+½)λ で強め合い' : '同位相：mλ で強め合い') + '　v = λ/T = ' + fmt(lam / T, 2) + ' m/s）</em>');
+      const dr = Math.abs(r1 - r2), q = dr / lam;
+      F.set('S₁P = ' + fmt(r1, 2) + ' m　S₂P = ' + fmt(r2, 2) + ' m　'
+        + '経路差 |S₁P−S₂P| = <b>' + fmt(dr, 2) + '</b> m = <b>' + fmt(q, 2) + ' λ</b>'
+        + '　<em>（' + (st.anti ? '逆位相：S₂ は S₁ が山を出す瞬間に谷を出す' : '同位相：S₁ と S₂ は同時に山を出す')
+        + '　λ = ' + fmt(lam, 2) + ' m　T = ' + fmt(T, 2) + ' s　v = λ/T = ' + fmt(lam / T, 2) + ' m/s）</em>');
+
+      // --- 点 P の y-t グラフ（P の変位を時刻 t の関数として描く） ---
+      const yP = tt => sinT(tt / T - r1 / lam) + sinT(tt / T - r2 / lam + phi);
+      DBG.yP = yP; DBG.ampP = () => { let m = 0; for (let k = 0; k < 720; k++) { const a = Math.abs(yP(k * T / 720)); if (a > m) m = a; } return m; };
+      cvP.clear(); cvP.setPad({ l: 40, r: 12, t: 12, b: 28 });
+      Nami.recorder(cvP, { t, span: 3 * T, A: 2, y: yP, color: C.wave, xStep: T, yStep: 1 });
+      const VP = cvP.view;
+      for (const s of [1, -1]) {
+        cvP.line(VP.x0, 2 * s, VP.x1, 2 * s, { color: hexA(C.muted, .5), width: 1, dash: [5, 5] });
+        cvP.text((s > 0 ? '+' : '−') + '2A', VP.x0, 2 * s, { dx: 16, color: C.muted, size: 12 });
+      }
     },
     period: () => st.T
   };
@@ -592,10 +666,10 @@ function tabPeriod() { return (this.api && this.api.period) ? this.api.period() 
 Nami.init({
   title: 'E 応用（ホイヘンスの原理）',
   tabs: [
-    { id: 'huygens', label: '12 素元波', period: tabPeriod, build: buildHuygens },
-    { id: 'refract', label: '屈折', period: tabPeriod, build: buildRefract },
-    { id: 'diffract', label: '回折（波動タンク）', scrub: false, period: tabPeriod, build: buildDiffract },
-    { id: 'interfere', label: '干渉', period: tabPeriod, build: buildInterfere }
+    { id: 'huygens', label: '13 素元波', period: tabPeriod, build: buildHuygens },
+    { id: 'refract', label: '14 屈折', period: tabPeriod, build: buildRefract },
+    { id: 'diffract', label: '15 回折（波動タンク）', scrub: false, period: tabPeriod, build: buildDiffract },
+    { id: 'interfere', label: '16 干渉', period: tabPeriod, build: buildInterfere }
   ]
 });
 })();
