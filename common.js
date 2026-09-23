@@ -71,7 +71,13 @@ window.Nami = (() => {
     return runs;
   }
   function mathHTML(str) { // HTMLタグはそのまま、テキスト部分だけ変換
-    return String(str).split(/(<[^>]+>)/).map(seg => (seg.startsWith('<') ? seg : mathRuns(seg).map(r => (r.i ? '<i>' + r.t + '</i>' : r.t)).join(''))).join('');
+    let lastNum = false; // 直前のテキストが数字で終わっていたら、タグをまたいだ直後の単位（例: <b>3.00</b> m）も立体
+    return String(str).split(/(<[^>]+>|&[A-Za-z#0-9]+;)/).map(seg => {
+      if (seg.startsWith('<') || seg.startsWith('&')) return seg;
+      const runs = mathRuns((lastNum ? '0' : '') + seg); if (lastNum && runs.length) runs[0].t = runs[0].t.slice(1);
+      lastNum = /\d\s*$/.test(seg);
+      return runs.map(r => (r.i ? '<i>' + r.t + '</i>' : r.t)).join('');
+    }).join('');
   }
   function hexA(hex, a) { // '#rrggbb' → rgba
     if (!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
