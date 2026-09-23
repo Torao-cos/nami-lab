@@ -69,9 +69,9 @@ Nami.init({
         ui.toggle(ctx.detail, { label: '球面波の振幅の減衰（1/√r）を入れる', checked: false, onChange: v => st.decay = v });
         ui.note(ctx.detail, '教科書の図では球面波の振幅は一定として描く。実際の水面波はエネルギーが広がるため遠くほど振幅が小さくなる（2次元では 1/√r）。');
         const ampS = r => st.decay ? S.A * Math.min(1, Math.sqrt((S.L / 2) / Math.max(r, 1e-6))) : S.A;
-        function crests(t) { // 山の位置（位相 t/T − x/λ = 1/4 + k → x）
-          const out = []; const base = S.L * (t / S.T - 0.25);
-          for (let k = Math.floor((base - 0) / S.L) - 8; k <= Math.floor(base / S.L) + 1; k++) { const x = base - k * S.L; if (x >= 0 && x <= Math.max(XW, RW) + S.L) out.push(x); }
+        function crests(t) { // 山の位置（位相 t/T − x/λ = 1/4 + k → x = base − kλ）。画面範囲 [0, XW+λ] を全て列挙
+          const out = []; const base = S.L * (t / S.T - 0.25); const xmax = Math.max(XW, RW) + S.L;
+          for (let k = Math.ceil((base - xmax) / S.L); k <= Math.floor(base / S.L); k++) { const x = base - k * S.L; if (x >= 0 && x <= xmax) out.push(x); }
           return out;
         }
         return {
@@ -124,7 +124,7 @@ Nami.init({
       id: 'shm', label: '2 単振動と正弦波', period: () => S.T,
       build(ctx) {
         ctx.layout('2x2');
-        const st = { showArc: true };
+        const st = { showArc: true, future: false };
         const cvC = ctx.canvas({ title: '等速円運動と鉛直方向への射影' });
         const cvR = ctx.canvas({ title: 'y-t グラフ（射影点の変位を時間に沿って記録）' });
         const detailWrap = el('div', 'stage'); detailWrap.id = 'shmDetail'; detailWrap.hidden = true; ctx.stage.parentElement.insertBefore(detailWrap, ctx.stage.nextSibling);
@@ -138,6 +138,7 @@ Nami.init({
         ui.note(c, '半径 A の円周上を周期 T で等速円運動する点を、真横（鉛直な直線上）に射影すると、射影点は単振動する。その変位 y を時間 t に対して記録すると正弦波（y-t グラフ）になる。y = A sin θ, θ = 2πt/T。');
         ui.toggle(ctx.detail, { label: '波として伝わる様子を表示（x=0 の媒質が射影点）', checked: false, onChange: v => { detailWrap.hidden = !v; if (v) sl.L.box.hidden = false; } });
         ui.toggle(ctx.detail, { label: '位相角 θ の弧を表示', checked: true, onChange: v => st.showArc = v });
+        ui.toggle(ctx.detail, { label: 'この先の y-t（未来）を薄く表示', checked: false, onChange: v => st.future = v });
         const YR = 1.75; // 縦レンジ（両パネル共通）
         return {
           draw(t) {
@@ -169,7 +170,7 @@ Nami.init({
             const span = Math.max(3 * S.T, 4); const { x0, x1 } = Nami.recorderWindow(t, span);
             cvR.setView({ x0, x1, y0: -YR, y1: YR });
             cvR.axes({ xLabel: 't [s]', yLabel: 'y [m]', yStep: 0.5 });
-            cvR.clip(() => { cvR.plot(tt => S.A * Math.sin(TAU * tt / S.T), { color: C.wave, width: 2.5, x0: 0, x1: t }); cvR.plot(tt => S.A * Math.sin(TAU * tt / S.T), { color: C.wave, width: 1, alpha: .25, dash: [4, 4], x0: t, x1 }); });
+            cvR.clip(() => { cvR.plot(tt => S.A * Math.sin(TAU * tt / S.T), { color: C.wave, width: 2.5, x0: 0, x1: t }); if (st.future) cvR.plot(tt => S.A * Math.sin(TAU * tt / S.T), { color: C.wave, width: 1, alpha: .25, dash: [4, 4], x0: t, x1 }); });
             cvR.line(x0, y, t, y, { color: C.yellow, width: 1.5, dash: [6, 4] });
             cvR.dot(t, y, 7, { color: C.wave, stroke: '#000' });
             cvR.hbracket(Math.max(x0, t - S.T), t, YR - 0.25, 'T = ' + fmt(S.T) + ' s', { color: C.yellow });

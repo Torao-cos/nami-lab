@@ -39,6 +39,39 @@ window.Nami = (() => {
     for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= raw) return m * p;
     return 10 * p;
   }
+  /* ---- 物理の書体規則: 変数（代数の英字・ギリシャ文字）＝斜体、単位・関数名・略語＝立体 ---- */
+  const UPRIGHT = new Set(['sin', 'cos', 'tan', 'log', 'exp', 'max', 'min', 'Hz', 'km', 'ms', 'cm', 'mm', 'kg', 'fps', 'rad', 'deg', 'OK', 'ON', 'OFF', 'NG', 'ID', 'PC', 'UI', 'URL', 'MIT', 'FDTD', 'PREM', 'PKP', 'PKIKP', 'RK', 'CDN', 'Lab', 'Nami', 'Oto']);
+  const SUB = '₀-₉′″'; // 下付き数字・プライム
+  const TOKEN = new RegExp(`(\\d(?:[.,]\\d+)?\\s?)?([A-Za-z\\u0391-\\u03A9\\u03B1-\\u03C9\\u0394][A-Za-z\\u0391-\\u03A9\\u03B1-\\u03C9${SUB}]*(?:/[A-Za-z\\u0391-\\u03A9\\u03B1-\\u03C9][A-Za-z\\u0391-\\u03A9\\u03B1-\\u03C9${SUB}]*)*)`, 'g');
+  const UNITS = new Set(['m', 's', 'Hz', 'km', 'cm', 'mm', 'ms', 'kg', 'g', 'N', 'J', 'W', 'Pa', 'K', 'min', 'h', 'rad', 'deg', 'fps', 'px', 'dB']);
+  const isUnit = tok => tok.split('/').every(p => UNITS.has(p));
+  function isVariable(tok) { // tok に '/' は含まない
+    if (UPRIGHT.has(tok)) return false;
+    const letters = tok.replace(new RegExp(`[${SUB}]`, 'g'), '');
+    if (letters.length === 1) return true;                          // x, λ, T
+    if (/[₀-₉]/.test(tok)) return true;                   // S₁P, v₂
+    if (letters.length >= 3 && /^[A-Z]+$/.test(letters)) return false; // FDTD, PKP（略語）
+    if (letters.length <= 3) return true;                           // mλ, fλ, vt, Δt, πA, AB（積・線分）
+    return false;                                                   // 単語
+  }
+  function mathRuns(str) { // → [{t, i}] i=斜体
+    const runs = []; let last = 0; str = String(str);
+    const push = (t, i) => { if (!t) return; const p = runs[runs.length - 1]; if (p && p.i === i) p.t += t; else runs.push({ t, i }); };
+    for (const m of str.matchAll(TOKEN)) {
+      push(str.slice(last, m.index), false);
+      // 直前の "[" 以降で "]" 未閉の範囲は単位表記
+      const openIdx = str.lastIndexOf('[', m.index), closeIdx = str.lastIndexOf(']', m.index); const inBracket = openIdx > closeIdx;
+      const num = m[1] || '', tok = m[2];
+      if (inBracket || (num && isUnit(tok))) push(num + tok, false);
+      else { push(num, false); tok.split(/(\/)/).forEach(p => { if (p.startsWith('π')) { push('π', false); p = p.slice(1); } if (p) push(p, p !== '/' && isVariable(p)); }); }
+      last = m.index + m[0].length;
+    }
+    push(str.slice(last), false);
+    return runs;
+  }
+  function mathHTML(str) { // HTMLタグはそのまま、テキスト部分だけ変換
+    return String(str).split(/(<[^>]+>)/).map(seg => (seg.startsWith('<') ? seg : mathRuns(seg).map(r => (r.i ? '<i>' + r.t + '</i>' : r.t)).join(''))).join('');
+  }
   function hexA(hex, a) { // '#rrggbb' → rgba
     if (!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
     const n = parseInt(hex.slice(1), 16);
@@ -51,7 +84,7 @@ window.Nami = (() => {
       this.opt = opt;
       this.box = el('div', 'panel' + (opt.className ? ' ' + opt.className : ''));
       if (opt.title) {
-        this.titleEl = el('div', 'panelTitle', opt.title);
+        this.titleEl = el('div', 'panelTitle'); this.titleEl.innerHTML = mathHTML(opt.title);
         if (opt.maximizable !== false) { this.titleEl.title = 'クリックで拡大／戻す'; this.titleEl.addEventListener('click', () => this.toggleMax()); }
         this.box.appendChild(this.titleEl);
       }
@@ -70,7 +103,7 @@ window.Nami = (() => {
       this.resize();
       this._bindPointer();
     }
-    setTitle(s) { if (this.titleEl) this.titleEl.textContent = s; }
+    setTitle(s) { if (this.titleEl) this.titleEl.innerHTML = mathHTML(s); }
     toggleMax() {
       const grid = this.box.parentElement; const on = this.box.classList.toggle('max');
       grid.classList.toggle('hasMax', on);
@@ -143,11 +176,10 @@ window.Nami = (() => {
           g.fillText(o.yTick ? o.yTick(y) : fmt(y, dy), Math.max(this.pad.l - 4, 14 + 4 * String(fmt(y, dy)).length), this.py(y));
         }
       }
-      // labels
-      g.fillStyle = C.text; g.font = 'bold 13px system-ui,sans-serif';
-      if (o.xLabel) { g.textAlign = 'right'; g.textBaseline = 'bottom'; g.fillText(o.xLabel, this.pad.l + this.iw - 2, ay - 3); }
-      if (o.yLabel) { g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(o.yLabel, ax + 5, this.pad.t + 2); }
       g.restore();
+      // labels（変数は斜体・単位は立体）
+      if (o.xLabel) this.textPx(o.xLabel, this.pad.l + this.iw - 2, ay - 3, { align: 'right', baseline: 'bottom', bold: true, bg: false });
+      if (o.yLabel) this.textPx(o.yLabel, ax + 5, this.pad.t + 2, { align: 'left', baseline: 'top', bold: true, bg: false });
     }
     plot(fn, o = {}) {
       const g = this.ctx; const x0 = o.x0 == null ? this.view.x0 : o.x0, x1 = o.x1 == null ? this.view.x1 : o.x1;
@@ -183,11 +215,17 @@ window.Nami = (() => {
       const g = this.ctx; this._stroke(o); g.beginPath(); g.ellipse(this.px(x), this.py(y), rWorld * this.sx, rWorld * this.sy, 0, o.a0 || 0, o.a1 == null ? TAU : o.a1); if (o.fill) { g.fillStyle = o.fill; g.fill(); } if (o.color !== 'none') g.stroke(); this._done();
     }
     text(str, x, y, o = {}) { this.textPx(str, this.px(x), this.py(y), o); }
-    textPx(str, X, Y, o = {}) {
-      const g = this.ctx; g.save(); g.font = `${o.bold ? 'bold ' : ''}${o.size || 13}px system-ui,sans-serif`;
-      g.textAlign = o.align || 'center'; g.textBaseline = o.baseline || 'middle'; X += o.dx || 0; Y += o.dy || 0;
-      if (o.bg !== false) { const m = g.measureText(str); const w = m.width + 6, h = (o.size || 13) + 4; let bx = X - 3; if (g.textAlign === 'center') bx = X - w / 2; if (g.textAlign === 'right') bx = X - w + 3; let by = Y - h / 2; if (g.textBaseline === 'top') by = Y - 2; if (g.textBaseline === 'bottom') by = Y - h + 2; g.fillStyle = o.bg || 'rgba(2,5,3,0.75)'; g.fillRect(bx, by, w, h); }
-      g.fillStyle = o.color || C.text; g.fillText(str, X, Y); g.restore();
+    textPx(str, X, Y, o = {}) { // 変数は斜体・単位は立体（o.rich===false で無効）
+      const g = this.ctx; g.save(); const size = o.size || 13, fontOf = it => `${it ? 'italic ' : ''}${o.bold ? 'bold ' : ''}${size}px system-ui,sans-serif`;
+      const runs = o.rich === false ? [{ t: String(str), i: false }] : mathRuns(str);
+      runs.forEach(r => { g.font = fontOf(r.i); r.w = g.measureText(r.t).width; });
+      const W = runs.reduce((s, r) => s + r.w, 0);
+      const align = o.align || 'center'; g.textBaseline = o.baseline || 'middle'; X += o.dx || 0; Y += o.dy || 0;
+      let x0 = align === 'center' ? X - W / 2 : align === 'right' ? X - W : X;
+      if (o.bg !== false) { const w = W + 6, h = size + 4; let by = Y - h / 2; if (g.textBaseline === 'top') by = Y - 2; if (g.textBaseline === 'bottom') by = Y - h + 2; g.fillStyle = o.bg || 'rgba(2,5,3,0.75)'; g.fillRect(x0 - 3, by, w, h); }
+      g.fillStyle = o.color || C.text; g.textAlign = 'left';
+      runs.forEach(r => { g.font = fontOf(r.i); g.fillText(r.t, x0, Y); x0 += r.w; });
+      g.restore();
     }
     hbracket(x1, x2, y, label, o = {}) { // 水平ブラケット（y位置・ワールド）
       const g = this.ctx, X1 = this.px(x1), X2 = this.px(x2), Y = this.py(y), t = (o.tick || 6) * (o.below ? -1 : 1);
@@ -233,7 +271,7 @@ window.Nami = (() => {
 
   /* ---------------- UI 部品 ---------------- */
   const ui = {
-    group(parent, label) { const d = el('div', 'ctl'); if (label) d.appendChild(el('span', 'ctlLabel', label)); parent.appendChild(d); return d; },
+    group(parent, label) { const d = el('div', 'ctl'); if (label) { const s = el('span', 'ctlLabel'); s.innerHTML = mathHTML(label); d.appendChild(s); } parent.appendChild(d); return d; },
     slider(parent, o) {
       const d = ui.group(parent, o.label); const r = el('input'); r.type = 'range'; r.min = o.min; r.max = o.max; r.step = o.step == null ? 'any' : o.step; r.value = o.value;
       const v = el('span', 'val'); d.appendChild(r); d.appendChild(v);
@@ -245,7 +283,7 @@ window.Nami = (() => {
     },
     toggle(parent, o) {
       const d = ui.group(parent); const lab = el('label'); const c = el('input'); c.type = 'checkbox'; c.checked = !!o.checked;
-      lab.appendChild(c); lab.appendChild(document.createTextNode(' ' + o.label)); d.appendChild(lab);
+      lab.appendChild(c); const lt = el('span'); lt.innerHTML = ' ' + mathHTML(o.label); lab.appendChild(lt); d.appendChild(lab);
       c.addEventListener('change', () => { if (o.onChange) o.onChange(c.checked); });
       return { el: c, box: d, get: () => c.checked, set: (b, silent) => { c.checked = !!b; if (!silent && o.onChange) o.onChange(c.checked); } };
     },
@@ -257,12 +295,12 @@ window.Nami = (() => {
     },
     button(parent, o) { const b = el('button', o.className || '', o.label); parent.appendChild(b); b.addEventListener('click', o.onClick); return b; },
     buttons(parent, label, list) { const d = ui.group(parent, label); return list.map(o => ui.button(d, o)); },
-    readout(parent, o) { const d = ui.group(parent, o.label); const s = el('span', 'readout', o.value || ''); d.appendChild(s); return { box: d, set: t => { s.textContent = t; } }; },
-    note(parent, text) { const n = el('div', 'note', text); parent.appendChild(n); return n; },
-    formula(parent, html) { const f = el('div', 'formula'); f.innerHTML = html || ''; parent.appendChild(f); return { el: f, set: h => { f.innerHTML = h; } }; },
+    readout(parent, o) { const d = ui.group(parent, o.label); const s = el('span', 'readout'); s.innerHTML = mathHTML(o.value || ''); d.appendChild(s); return { box: d, set: t => { s.innerHTML = mathHTML(t); } }; },
+    note(parent, text) { const n = el('div', 'note'); n.innerHTML = mathHTML(text); parent.appendChild(n); return n; },
+    formula(parent, html) { const f = el('div', 'formula'); f.innerHTML = mathHTML(html || ''); parent.appendChild(f); return { el: f, set: h => { f.innerHTML = mathHTML(h); } }; },
     sep(parent) { parent.appendChild(el('div', 'sep')); },
     legend(parent, items) { // [[color,label],...]
-      const d = ui.group(parent); items.forEach(([c, l]) => { const s = el('span'); const sw = el('span', 'swatch'); sw.style.background = c; s.appendChild(sw); s.appendChild(document.createTextNode(l)); s.style.color = C.muted; s.style.fontSize = '.9rem'; d.appendChild(s); }); return d;
+      const d = ui.group(parent); items.forEach(([c, l]) => { const s = el('span'); const sw = el('span', 'swatch'); sw.style.background = c; s.appendChild(sw); const lt = el('span'); lt.innerHTML = mathHTML(l); s.appendChild(lt); s.style.color = C.muted; s.style.fontSize = '.9rem'; d.appendChild(s); }); return d;
     }
   };
 
@@ -317,7 +355,7 @@ window.Nami = (() => {
     reset() { this.t = 0; if (this.tab.api && this.tab.api.onReset) this.tab.api.onReset(); }
     setT(v) { this.t = Math.max(0, v); }
     toggleDetail() { const on = this.tab.ctx.detail.hidden; this.tab.ctx.detail.hidden = !on; this.detailBtn.classList.toggle('active', on); }
-    tick(dtReal) { let dt = 0; if (this.running) { dt = Math.min(dtReal, 0.05) * this.speed; this.t += dt; } this.tMaxView = Math.max(this.tMaxView, this.t); this.range.max = this.tMaxView; if (this.canScrub) this.range.value = this.t; this.tval.textContent = 't = ' + fmt(this.t, 2) + ' s'; return dt; }
+    tick(dtReal) { let dt = 0; if (this.running) { dt = Math.min(dtReal, 0.05) * this.speed; this.t += dt; } this.tMaxView = Math.max(this.tMaxView, this.t); this.range.max = this.tMaxView; if (this.canScrub) this.range.value = this.t; this.tval.innerHTML = '<i>t</i> = ' + fmt(this.t, 2) + ' s'; return dt; }
   }
 
   /* ---------------- アプリ ---------------- */
@@ -339,7 +377,7 @@ window.Nami = (() => {
     const footer = el('footer'); footer.innerHTML = (o.footer ? o.footer + '<br>' : '') + '画面をクリック／タップで停止・再開。停止中も点やカット線はドラッグできます。時間バーで過去に戻れます（回折を除く）。 © SciCos / MIT License'; document.body.appendChild(footer);
 
     o.tabs.forEach(tab => {
-      const btn = el('button', null, tab.label); btn.addEventListener('click', () => activate(tab.id, true)); nav.appendChild(btn); tab.btn = btn;
+      const btn = el('button'); btn.innerHTML = mathHTML(tab.label); btn.addEventListener('click', () => activate(tab.id, true)); nav.appendChild(btn); tab.btn = btn;
       const view = el('section', 'view'); main.appendChild(view); tab.view = view; tab.built = false;
       app.tabs.push(tab);
     });
@@ -401,5 +439,5 @@ window.Nami = (() => {
     if (o.pen !== false && t >= 0) cv.dot(t, o.y(t), 5, { color: o.color || C.wave, stroke: '#000' });
   }
 
-  return { C, TAU, clamp, frac, fmt, el, niceStep, hexA, Canvas, ui, Wave, Sim, init, recorder, recorderWindow, app };
+  return { C, TAU, clamp, frac, fmt, el, niceStep, hexA, mathHTML, mathRuns, Canvas, ui, Wave, Sim, init, recorder, recorderWindow, app };
 })();
