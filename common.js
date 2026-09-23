@@ -62,7 +62,8 @@ window.Nami = (() => {
       // 直前の "[" 以降で "]" 未閉の範囲は単位表記
       const openIdx = str.lastIndexOf('[', m.index), closeIdx = str.lastIndexOf(']', m.index); const inBracket = openIdx > closeIdx;
       const num = m[1] || '', tok = m[2];
-      if (inBracket || (num && isUnit(tok))) push(num + tok, false);
+      const next = str[m.index + m[0].length] || '';
+      if (inBracket || (num && isUnit(tok)) || next === '波') push(num + tok, false); // 単位・「P波」等の名前は立体
       else { push(num, false); tok.split(/(\/)/).forEach(p => { if (p.startsWith('π')) { push('π', false); p = p.slice(1); } if (p) push(p, p !== '/' && isVariable(p)); }); }
       last = m.index + m[0].length;
     }

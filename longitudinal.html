@@ -1,0 +1,749 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>C 縦波 - なみラボ</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  /* このページだけの局所補正（common.css は編集しない） */
+  .stage.rows4{flex:1}
+  .stage.rows4{grid-template-rows:0.9fr 1fr 1.45fr 1fr}
+  .stage.rows4 .panel{min-height:0}
+  .stage.rows4 .panel canvas{min-height:86px}
+  .stage.rows2{flex:1}
+  .stage.rows2 .panel{min-height:190px}
+  .stage.earth{flex:1}
+  .stage.earth .panel{min-height:420px}
+  .panel .overlay{top:auto;bottom:.4rem;right:.6rem}
+  .controls .tag{color:var(--muted);font-size:.85rem;border:1px solid var(--line);border-radius:6px;padding:.1rem .4rem}
+  .controls .bigread{font-weight:900;color:var(--yellow);font-variant-numeric:tabular-nums;font-size:1.05rem}
+  @media (max-width:760px){ .stage.earth .panel{min-height:400px} .stage.rows4 .panel canvas{min-height:74px} }
+</style>
+</head><body>
+<script src="common.js"></script>
+<script>
+(() => {
+'use strict';
+const { C, TAU, ui, Wave, fmt, clamp, hexA, mathHTML } = Nami;
+const SPARSE = '#cfd8ff'; // 疎のラベル色（腹の水色と区別）
+
+/* ===================================================================
+ *  共有パラメータ（タブ6と8で共通。タブ切替時に onShow で再同期）
+ * =================================================================== */
+const S = { lambda: 2.0, T: 2.0, A: 0.30 };
+const X0 = 0, X1 = 8.0;                       // 玉列の x 範囲 [m]
+const ampMax = () => 0.95 * S.lambda / TAU;   // 玉が追い越さない上限（dξ/dx > -1）
+
+// 縦波の変位 ξ(x,t) = A sin 2π(t/T − x/λ)   右向きが正
+const xi   = (x, t) => S.A * Math.sin(TAU * (t / S.T - x / S.lambda));
+const vxi  = (x, t) => S.A * (TAU / S.T) * Math.cos(TAU * (t / S.T - x / S.lambda));
+const dxi  = (x, t) => -S.A * (TAU / S.lambda) * Math.cos(TAU * (t / S.T - x / S.lambda)); // ∂ξ/∂x
+// 位相 φ = 2π(t/T − x/λ) が φ = 2πn となる x が「密」（ξ が +→− に零交差・∂ξ/∂x 最小）
+//                        φ = π+2πn となる x が「疎」
+function combX(t, off) {              // x = λ(t/T − off − n) のうち [X0,X1] にあるもの
+  const xs = S.lambda * (t / S.T - off), out = [];
+  const n0 = Math.ceil((xs - X1) / S.lambda), n1 = Math.floor((xs - X0) / S.lambda);
+  for (let n = n0; n <= n1; n++) out.push(xs - n * S.lambda);
+  return out.sort((a, b) => a - b);
+}
+const denseX = t => combX(t, 0);      // 密
+const rareX  = t => combX(t, 0.5);    // 疎
+
+function ballXs(N) { const a = []; for (let i = 0; i < N; i++) a.push(X0 + (X1 - X0) * i / (N - 1)); return a; }
+
+// 密・疎の位置をはさむ「両どなり」の玉の番号。
+// 密ではこの2つの玉が向かい合う向きにずれている（＝両側から寄ってくるから混みあう）、疎では逆に離れていく。
+function flankPairs(xs, pos) {
+  const out = [], h = xs.length > 1 ? (xs[1] - xs[0]) : 0;
+  for (const x of pos) {
+    // 密・疎の位置にちょうど玉が重なると、その玉の変位は 0 で向きが見えない。
+    // そこで「その位置から半玉ぶん以上はなれた、いちばん近い玉」を左右それぞれで選ぶ。
+    let L = -1, R = -1;
+    for (let i = 0; i < xs.length; i++) { if (xs[i] < x - h * 0.25) L = i; else if (R < 0 && xs[i] > x + h * 0.25) R = i; }
+    if (L >= 0 && R >= 0) out.push([L, R]);
+  }
+  return out;
+}
+function flankMarks(xs, t, on) {
+  const m = new Map();
+  if (!on) return m;
+  for (const [i, j] of flankPairs(xs, rareX(t)))  { m.set(i, 'r'); m.set(j, 'r'); }
+  for (const [i, j] of flankPairs(xs, denseX(t))) { m.set(i, 'd'); m.set(j, 'd'); }   // 重なったら密を優先
+  return m;
+}
+
+/* λ・T・A スライダー（3タブで共通に作る） */
+function paramControls(parent, onChange) {
+  const sL = ui.slider(parent, { label: '波長 λ', min: 1, max: 4, step: 0.1, value: S.lambda, unit: 'm', digits: 1,
+    onInput: v => { S.lambda = v; sA.el.max = ampMax(); if (S.A > ampMax()) { S.A = ampMax(); sA.set(S.A, true); } onChange(); } });
+  const sT = ui.slider(parent, { label: '周期 T', min: 0.5, max: 4, step: 0.1, value: S.T, unit: 's', digits: 1,
+    onInput: v => { S.T = v; onChange(); } });
+  const sA = ui.slider(parent, { label: '振幅 A', min: 0.02, max: ampMax(), step: 0.01, value: S.A, unit: 'm', digits: 2,
+    onInput: v => { S.A = v; onChange(); } });
+  sA.box.title = '玉どうしが追い越さない上限 λ/2π まで';
+  return { sync() { sL.set(S.lambda, true); sT.set(S.T, true); sA.el.max = ampMax(); sA.set(S.A, true); } };
+}
+
+/* ===================================================================
+ *  タブ6  縦波と横波
+ * =================================================================== */
+function buildLT(ctx) {
+  let mode = 'both', showVel = false, showTrail = true, showEq = true,
+      showLabels = true, showLam = true, N = 41;
+  ctx.layout('1'); ctx.stage.classList.add('rows2');
+
+  const cvT = ctx.canvas({ title: '横波（玉は上下にふるえる）' });
+  const cvL = ctx.canvas({ title: '縦波（玉は左右にふるえる）＝疎密ができる' });
+  const applyMode = () => {
+    cvT.box.hidden = (mode === 'long'); cvL.box.hidden = (mode === 'trans');
+    ctx.stage.style.gridTemplateRows = (mode === 'both') ? '1fr 1fr' : '1fr';
+  };
+
+  ui.select(ctx.controls, { label: '表示', value: mode, options: [['trans', '横波'], ['long', '縦波'], ['both', '両方同時']],
+    onChange: v => { mode = v; applyMode(); } });
+  ui.sep(ctx.controls);
+  const P = paramControls(ctx.controls, () => {});
+  ui.sep(ctx.controls);
+  ui.toggle(ctx.controls, { label: '媒質の速度矢印', checked: showVel, onChange: v => showVel = v });
+  ui.toggle(ctx.controls, { label: '疎・密ラベル', checked: showLabels, onChange: v => showLabels = v });
+  ui.toggle(ctx.controls, { label: 'λ ブラケット', checked: showLam, onChange: v => showLam = v });
+  ui.note(ctx.controls, '黄色い玉に注目：時間がたっても右へは進まない。進むのは「振動のようす」だけ。');
+  ui.note(ctx.controls, '「密」と書いてある所では、左どなりの玉が右へ、右どなりの玉が左へずれている（紫の矢印＝つり合いの位置からのずれ）。両側から玉が寄ってくるから混みあう。「疎」はその逆。ラベルは規則で貼っているのではなく、この2本の矢印の向きがそのまま理由。');
+
+  ui.toggle(ctx.detail, { label: '注目した玉の軌跡（振動の範囲）', checked: showTrail, onChange: v => showTrail = v });
+  ui.toggle(ctx.detail, { label: 'つり合いの位置の目印', checked: showEq, onChange: v => showEq = v });
+  ui.slider(ctx.detail, { label: '玉の数 N', min: 21, max: 81, step: 2, value: N, digits: 0, onInput: v => N = Math.round(v) });
+  ui.note(ctx.detail, '振幅 A の上限は λ/2π。これを超えると玉が隣を追い越してしまい、媒質として成り立たない。');
+
+  applyMode();
+
+  /* --- 横波の描画 --- */
+  function drawTrans(t) {
+    const cv = cvT, A = S.A, yM = Math.max(A * 2.3, 0.2);
+    cv.clear(); cv.setView({ x0: X0 - 0.45, x1: X1 + 0.45, y0: -yM, y1: yM });
+    cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1, yStep: A >= 0.2 ? 0.1 : 0.05 });
+    const y = x => A * Math.sin(TAU * (t / S.T - x / S.lambda));
+    cv.clip(() => {
+      cv.plot(y, { color: C.wave, width: 2, alpha: 0.35, x0: X0, x1: X1 });
+      const xs = ballXs(N), ci = Math.round((N - 1) / 2);
+      if (showEq) for (const x of xs) cv.dot(x, 0, 1.5, { color: C.muted, alpha: 0.5 });
+      if (showTrail) { cv.line(xs[ci], -A, xs[ci], A, { color: C.yellow, width: 1.2, alpha: 0.35, dash: [3, 3] }); cv.dot(xs[ci], 0, 2.5, { color: C.yellow, alpha: 0.6 }); }
+      if (showVel) { const k = A * 0.85 / (A * TAU / S.T); for (const x of xs) cv.arrow(x, y(x), x, y(x) + vxi(x, t) * k, { color: C.vel, width: 1.6, head: 6, alpha: 0.9 }); }
+      xs.forEach((x, i) => cv.dot(x, y(x), i === ci ? 6.5 : 4.5, { color: i === ci ? C.yellow : C.wave, stroke: '#04140b', width: 1 }));
+      // 変位ブラケット
+      const xc = xs[ci];
+      cv.vbracket(xc, 0, y(xc), '変位', { color: C.yellow, size: 12 });
+      // λ ブラケット（山→山）
+      if (showLam) {
+        const cr = combX(t, 0.25);
+        if (cr.length >= 2) { let b = 0; for (let i = 1; i < cr.length; i++) if (Math.abs((cr[i] + cr[i - 1]) / 2 - (X0 + X1) / 2) < Math.abs((cr[b + 1] + cr[b]) / 2 - (X0 + X1) / 2)) b = i - 1;
+          cv.hbracket(cr[b], cr[b + 1], A * 1.75, 'λ（山→山）', { color: C.yellow }); }
+      }
+    });
+    cv.overlayTL.textContent = '媒質のふるえる向き ↕　波の進む向き →';
+  }
+
+  /* --- 縦波の描画 --- */
+  const BY = 0.55;                     // 玉列の高さ（x軸は下端に置いて目盛りを重ねない）
+  function drawLong(t) {
+    const cv = cvL, A = S.A;
+    cv.clear(); cv.setView({ x0: X0 - 0.45, x1: X1 + 0.45, y0: 0.02, y1: 1.62 });
+    cv.axes({ xLabel: 'x [m]', xStep: 1, yTicks: false, yAxis: false, yStep: 9 });
+    const xs = ballXs(N), ci = Math.round((N - 1) / 2), mk = flankMarks(xs, t, showLabels);
+    cv.clip(() => {
+      if (showLabels) {
+        for (const x of denseX(t)) cv.line(x, 0.05, x, 1.0, { color: C.dens, width: 1.4, alpha: 0.5, dash: [4, 4] });
+        for (const x of rareX(t))  cv.line(x, 0.05, x, 1.0, { color: SPARSE, width: 1.2, alpha: 0.35, dash: [2, 5] });
+      }
+      if (showEq) for (const x of xs) cv.dot(x, BY - 0.28, 1.5, { color: C.muted, alpha: 0.55 });
+      if (showTrail) { cv.line(xs[ci] - A, BY, xs[ci] + A, BY, { color: C.yellow, width: 1.2, alpha: 0.35, dash: [3, 3] }); cv.dot(xs[ci], BY - 0.28, 3, { color: C.yellow, alpha: 0.7 }); }
+      if (showVel) { const k = 0.9 / (A * TAU / S.T) * Math.min(A, 0.3); for (const x of xs) { const p = x + xi(x, t); cv.arrow(p, BY + 0.26, p + vxi(x, t) * k, BY + 0.26, { color: C.vel, width: 1.6, head: 6, alpha: 0.9, zeroDot: true }); } }
+      // 「密／疎」の理由を玉列の上に出す：その位置の両どなりの玉が、つり合いの位置からどちらへずれているか
+      if (showLabels) for (let i = 0; i < xs.length; i++) {
+        const m = mk.get(i); if (!m) continue;
+        cv.arrow(xs[i], BY - 0.13, xs[i] + xi(xs[i], t), BY - 0.13, { color: m === 'd' ? C.dens : SPARSE, width: 2.2, head: 7, zeroDot: true });
+      }
+      xs.forEach((x, i) => { const m = mk.get(i);
+        cv.dot(x + xi(x, t), BY, (i === ci || m) ? 6.5 : 4.5,
+          { color: i === ci ? C.yellow : C.wave, stroke: m ? (m === 'd' ? C.dens : SPARSE) : '#04140b', width: m ? 2 : 1 }); });
+      const xc = xs[ci], d0 = Math.min(xc, xc + xi(xc, t)), d1 = Math.max(xc, xc + xi(xc, t));
+      cv.hbracket(d0, d1, BY - 0.28, '変位', { color: C.yellow, below: true, size: 12 });
+      if (showLabels) {
+        for (const x of denseX(t)) { cv.text('密', x, BY + 0.5, { color: C.dens, bold: true, size: 15 });
+          cv.text('両側から寄ってくる', x, BY + 0.34, { color: C.dens, size: 10 }); }
+        for (const x of rareX(t))  { cv.text('疎', x, BY + 0.5, { color: SPARSE, bold: true, size: 15 });
+          cv.text('両側へ離れていく', x, BY + 0.34, { color: SPARSE, size: 10 }); }
+      }
+      if (showLam) {
+        const d = denseX(t);
+        if (d.length >= 2) { let b = 0; for (let i = 1; i < d.length; i++) if (Math.abs((d[i] + d[i - 1]) / 2 - (X0 + X1) / 2) < Math.abs((d[b + 1] + d[b]) / 2 - (X0 + X1) / 2)) b = i - 1;
+          cv.hbracket(d[b], d[b + 1], BY + 0.75, 'λ（密→密）', { color: C.yellow }); }
+      }
+    });
+    cv.overlayTL.textContent = '媒質のふるえる向き ↔　波の進む向き →' + (showVel ? '（橙の矢印は玉の速度）' : '');
+  }
+
+  return {
+    onShow() { P.sync(); },
+    draw(t) { if (!cvT.box.hidden) drawTrans(t); if (!cvL.box.hidden) drawLong(t); }
+  };
+}
+
+/* ===================================================================
+ *  タブ7  地震のP波・S波（球対称スネルの法則で波線追跡）
+ * =================================================================== */
+const ER = 6371, R_CMB = 3480, R_ICB = 1221.5, DEG = 180 / Math.PI;
+// PREM（Dziewonski & Anderson 1981）の速度多項式をそのまま区分線形にサンプリングした v(r) [km/s]
+// 層の区切り（D″＝半径 3480〜3630 km ＝厚さ150 km／410・660 km 不連続／外核・内核）は PREM の値どおり。
+// 簡略化したのは次の2点だけ:
+//   ① 地殻・海洋（半径 6291 km より上）は省略し、最上部マントルの値 8.08 / 4.47 km/s で代表させる
+//   ② 多項式を折れ線で近似する（節点の間は直線補間）
+// ※速度分布を「教科書のシャドーゾーンに合う」ように調整することはしない。計算値と観測値のずれは
+//   モデルを曲げて消すのではなく、なぜずれるのかを画面で説明する（下の ui.note を参照）。
+const VMODEL = {
+  P: {
+    mantle: [[3480, 13.72], [3555, 13.70], [3630, 13.68], [3770.7, 13.51], [3911.4, 13.35], [4052.1, 13.19],
+             [4192.9, 13.02], [4333.6, 12.86], [4474.3, 12.70], [4615, 12.53], [4755.7, 12.35], [4896.4, 12.17],
+             [5037.1, 11.97], [5177.9, 11.77], [5318.6, 11.55], [5459.3, 11.31], [5600, 11.07], [5701, 10.75],
+             [5771, 10.16], [5871, 9.65], [5971, 9.13], [6061, 8.73], [6151, 8.56], [6291, 8.08], [6371, 8.08]],
+    outer:  [[1221.5, 10.36], [1503.8, 10.19], [1786.1, 10.00], [2068.4, 9.78], [2350.8, 9.53], [2633.1, 9.24],
+             [2915.4, 8.91], [3197.7, 8.52], [3480, 8.06]],
+    inner:  [[0, 11.26], [305.4, 11.25], [610.8, 11.20], [916.1, 11.13], [1221.5, 11.03]]
+  },
+  S: {
+    mantle: [[3480, 7.26], [3555, 7.26], [3630, 7.27], [3770.7, 7.20], [3911.4, 7.14], [4052.1, 7.08],
+             [4192.9, 7.01], [4333.6, 6.95], [4474.3, 6.88], [4615, 6.82], [4755.7, 6.75], [4896.4, 6.67],
+             [5037.1, 6.60], [5177.9, 6.52], [5318.6, 6.43], [5459.3, 6.34], [5600, 6.24], [5701, 5.95],
+             [5771, 5.52], [5871, 5.22], [5971, 4.93], [6061, 4.71], [6151, 4.64], [6291, 4.47], [6371, 4.47]],
+    outer:  null,   // 液体なので S 波は伝わらない
+    inner:  [[0, 3.67], [407.2, 3.65], [814.3, 3.60], [1221.5, 3.50]]
+  }
+};
+const BPS = {};   // 折れ点（この半径ちょうどで積分を区切る＝RK4 の次数を保つ）
+for (const k of ['P', 'S']) {
+  const s = new Set([ER, R_CMB, R_ICB]);
+  for (const lay of ['mantle', 'outer', 'inner']) { const kn = VMODEL[k][lay]; if (kn) kn.forEach(q => s.add(q[0])); }
+  BPS[k] = [...s].sort((a, b) => a - b);
+}
+const layerOf = r => r > R_CMB ? 'mantle' : (r > R_ICB ? 'outer' : 'inner');
+function segIdx(kn, r) { let i = 1; while (i < kn.length - 1 && r > kn[i][0]) i++; return i; }
+function vAt(kind, lay, r) {
+  const kn = VMODEL[kind][lay]; if (!kn) return 0;
+  if (r <= kn[0][0]) return kn[0][1];
+  if (r >= kn[kn.length - 1][0]) return kn[kn.length - 1][1];
+  const i = segIdx(kn, r), a = kn[i - 1], b = kn[i];
+  return a[1] + (b[1] - a[1]) * (r - a[0]) / (b[0] - a[0]);
+}
+function dvAt(kind, lay, r) {
+  const kn = VMODEL[kind][lay]; if (!kn) return 0;
+  if (r < kn[0][0] || r > kn[kn.length - 1][0]) return 0;
+  const i = segIdx(kn, r), a = kn[i - 1], b = kn[i];
+  return (b[1] - a[1]) / (b[0] - a[0]);
+}
+// 状態 y=[r, Δ, i, τ]  i は外向き動径からの角（0=真上, π=真下）。p = r sin i / v は一定
+function deriv(kind, lay, y) {
+  const r = y[0], v = vAt(kind, lay, r), si = Math.sin(y[2]);
+  return [Math.cos(y[2]), si / r, si * (dvAt(kind, lay, r) / v - 1 / r), 1 / v];
+}
+function rk4(kind, lay, y, h) {
+  const k1 = deriv(kind, lay, y);
+  const a = y.map((c, j) => c + h / 2 * k1[j]), k2 = deriv(kind, lay, a);
+  const b = y.map((c, j) => c + h / 2 * k2[j]), k3 = deriv(kind, lay, b);
+  const c = y.map((q, j) => q + h * k3[j]), k4 = deriv(kind, lay, c);
+  return y.map((q, j) => q + h / 6 * (k1[j] + 2 * k2[j] + 2 * k3[j] + k4[j]));
+}
+function nextBP(kind, rFrom, rTo) {
+  const bps = BPS[kind];
+  if (rTo > rFrom) { for (const b of bps) if (b > rFrom + 1e-9 && b <= rTo + 1e-12) return b; }
+  else { for (let i = bps.length - 1; i >= 0; i--) { const b = bps[i]; if (b < rFrom - 1e-9 && b >= rTo - 1e-12) return b; } }
+  return null;
+}
+function traceRay(kind, r0, takeoffDeg, opt) {
+  opt = opt || {};
+  const ds = opt.ds || 10, noInner = !!opt.noInner, keep = opt.keep !== false;
+  let lay = layerOf(r0 - 1e-6);
+  let y = [r0, 0, Math.PI - takeoffDeg / DEG, 0];
+  const p0 = r0 * Math.sin(y[2]) / vAt(kind, lay, r0);
+  let dir = Math.cos(y[2]) < 0 ? -1 : 1, lastB = null, lastBStep = -99;
+  let end = 'max', enteredCore = false, enteredInner = false;
+  const raw = keep ? [[y[0], y[1], y[3]]] : null;
+  const maxSteps = opt.maxSteps || 20000;
+  for (let st = 0; st < maxSteps; st++) {
+    let ny = rk4(kind, lay, y, ds);
+    let b = nextBP(kind, y[0], ny[0]);
+    if (b != null && b === lastB && st - lastBStep <= 2) b = null;   // 折れ点ちょうどで反転する退化ケースの往復防止
+    let atBP = false;
+    if (b != null) {
+      let f = (b - y[0]) / (ny[0] - y[0]), cand = ny, ok = false;
+      for (let it = 0; it < 6; it++) {
+        f = Math.max(1e-7, Math.min(1, f));
+        cand = rk4(kind, lay, y, ds * f);
+        if (Math.abs(cand[0] - b) < 1e-6) { ok = true; break; }
+        const den = cand[0] - y[0]; if (Math.abs(den) < 1e-12) break;
+        f *= (b - y[0]) / den;
+      }
+      if (ok || Math.abs(cand[0] - b) < 0.2) { ny = cand; ny[0] = b; atBP = true; lastB = b; lastBStep = st; }
+    }
+    { // スネルの法則 p 一定を厳密に課す（反転点近傍は積分に任せる）
+      const s = p0 * vAt(kind, lay, ny[0]) / ny[0], c = Math.cos(ny[2]);
+      if (Math.abs(c) > 1e-7) dir = c < 0 ? -1 : 1;
+      if (s <= 0.99999) ny[2] = dir < 0 ? Math.PI - Math.asin(s) : Math.asin(s);
+    }
+    if (atBP && ny[0] >= ER) { if (raw) raw.push([ny[0], ny[1], ny[3]]); y = ny; end = 'surface'; break; }
+    if (atBP && (ny[0] === R_CMB || ny[0] === R_ICB)) {
+      const down = dir < 0;
+      const newLay = ny[0] === R_CMB ? (down ? 'outer' : 'mantle') : (down ? 'inner' : 'outer');
+      if (newLay !== lay) {
+        if (kind === 'S' && newLay === 'outer') { if (raw) raw.push([ny[0], ny[1], ny[3]]); y = ny; end = 'cmb'; break; }
+        if (noInner && newLay === 'inner')       { if (raw) raw.push([ny[0], ny[1], ny[3]]); y = ny; end = 'icb'; break; }
+        const vOld = vAt(kind, lay, ny[0]), vNew = vAt(kind, newLay, ny[0]);
+        const sn = Math.sin(ny[2]) * vNew / vOld;
+        if (Math.abs(sn) > 1) { if (raw) raw.push([ny[0], ny[1], ny[3]]); y = ny; end = 'tir'; break; }
+        ny[2] = down ? Math.PI - Math.asin(sn) : Math.asin(sn);
+        lay = newLay;
+        if (newLay === 'outer' && down) enteredCore = true;
+        if (newLay === 'inner' && down) enteredInner = true;
+      }
+      ny[0] += dir * 1e-4;
+    } else if (atBP) { ny[0] += dir * 1e-4; }
+    if (raw) raw.push([ny[0], ny[1], ny[3]]);
+    y = ny;
+    if (y[0] < 3) { end = 'center'; break; }
+  }
+  return { raw, end, delta: y[1] * DEG, tau: y[3], enteredCore, enteredInner };
+}
+// 描画用に間引いて直交座標へ（震源は上＝θ=0）
+function toPath(raw, every) {
+  const out = [], n = raw.length, k = Math.max(1, Math.round(n / (every || 150)));
+  for (let i = 0; i < n; i += k) { const q = raw[i]; out.push([q[0] * Math.sin(q[1]), q[0] * Math.cos(q[1]), q[2]]); }
+  const q = raw[n - 1]; out.push([q[0] * Math.sin(q[1]), q[0] * Math.cos(q[1]), q[2]]);
+  return out;
+}
+// 「核に入る／入らない」などの境界となる射出角を二分法で求める
+function critAngle(kind, r0, ds, pred) {
+  let lo = 0.02, hi = 89.95;
+  for (let i = 0; i < 34; i++) { const m = (lo + hi) / 2; if (pred(traceRay(kind, r0, m, { ds, keep: false }))) lo = m; else hi = m; }
+  return hi;
+}
+
+function buildSeismic(ctx) {
+  let depth = 15, nRays = 36, scale = 30;
+  let showP = true, showS = true, showFront = true, showShadow = true, showInner = false, showVprof = false;
+  let obsTh = 75 / DEG;
+  ctx.layout('1'); ctx.stage.classList.add('earth');
+
+  const cv = ctx.canvas({ title: '地球の断面（模式図）— 震源から出た P波・S波の道すじ' });
+  const cvV = ctx.canvas({ title: '地震波の速度分布 v(r)（PREM 簡略）', maximizable: false });
+  cvV.box.hidden = true;
+
+  let RAYS = { P: [], S: [] }, ARR = { P: [], S: [] }, BND = null, busy = false;
+
+  function rebuildRays() {
+    const r0 = ER - depth;
+    for (const kind of ['P', 'S']) {
+      const list = [];
+      for (let k = 0; k < nRays; k++) {
+        const a = 0.6 + (89.4 - 0.6) * k / (nRays - 1);
+        const r = traceRay(kind, r0, a, { ds: 10, noInner: !showInner });
+        if (r.end === 'icb') continue;                 // 内核を通る波（PKIKP）は既定で省略
+        const path = toPath(r.raw, 150);
+        list.push({ a, end: r.end, delta: r.delta, tau: r.tau, path, pathM: path.map(q => [-q[0], q[1], q[2]]) });
+      }
+      RAYS[kind] = list;
+    }
+  }
+  function rebuildAnalysis() {
+    const r0 = ER - depth, ds = 16;
+    // 走時表（Δ→τ の補間用）
+    for (const kind of ['P', 'S']) {
+      const list = [];
+      for (let k = 0; k <= 170; k++) {
+        const a = 0.2 + (89.8 - 0.2) * k / 170;
+        const r = traceRay(kind, r0, a, { ds, keep: false, noInner: true });
+        if (r.end === 'surface') list.push({ a, d: r.delta, t: r.tau });
+      }
+      ARR[kind] = list;
+    }
+    // シャドーゾーン境界
+    const aP = critAngle('P', r0, ds, r => r.enteredCore);
+    const dP = traceRay('P', r0, aP, { ds, keep: false }).delta;
+    const aS = critAngle('S', r0, ds, r => r.end !== 'surface');
+    const dS = traceRay('S', r0, aS, { ds, keep: false }).delta;
+    const fd = a => { const r = traceRay('P', r0, a, { ds, keep: false }); return (r.end === 'surface' && r.enteredCore && !r.enteredInner) ? r.delta : 1e9; };
+    let ba = aP / 2, bd = 1e9, M = 90;
+    for (let k = 0; k <= M; k++) { const a = 0.02 + (aP - 0.02) * k / M, d = fd(a); if (d < bd) { bd = d; ba = a; } }
+    let lo = ba - (aP - 0.02) / M, hi = ba + (aP - 0.02) / M;
+    for (let it = 0; it < 28; it++) { const m1 = lo + (hi - lo) * .382, m2 = lo + (hi - lo) * .618; if (fd(m1) < fd(m2)) hi = m2; else lo = m1; }
+    BND = { pStart: dP, pEnd: fd((lo + hi) / 2), sStart: dS, depth };
+    window.__nami_debug = Object.assign(window.__nami_debug || {}, { shadow: BND });
+    readShadow.set(`P：${fmt(BND.pStart, 1)}°〜${fmt(BND.pEnd, 1)}°　／　S：${fmt(BND.sStart, 1)}°以遠`);
+    noteWhy.innerHTML = mathHTML(
+      `教科書の「P 103°〜143°」とずれる理由：ここで計算しているのは波線（射線）＝スネルの法則でたどれる道すじだけ。` +
+      `マントルだけを通って地表にもどる P がとどく限界は計算値 ${fmt(BND.pStart, 1)}°。` +
+      `教科書の 103° は、外核の表面をかすめて回り込む P（回折波）まで含めた観測値で、波線の計算には出てこない。` +
+      `つまりこの差は速度分布の誤差ではなく、「波線で考える」という方法そのものの限界。` +
+      `向こう側の縁 ${fmt(BND.pEnd, 1)}° は、外核を通りぬけた P（PKP）がもどってくる最小の角距離（教科書の 143° にあたる）。` +
+      `S の影が ${fmt(BND.sStart, 1)}° 以遠になるのは、液体の外核を S 波が通れず、外核にぶつかった波線がそこで終わるから（波線上の × 印）。`
+    );
+  }
+  function rebuildAll() { if (busy) return; busy = true; rebuildRays(); rebuildAnalysis(); busy = false; }
+
+  function firstArrival(list, d) {
+    let best = null;
+    for (let i = 1; i < list.length; i++) {
+      const a = list[i - 1], b = list[i];
+      if ((a.d - d) * (b.d - d) <= 0 && Math.abs(a.d - b.d) < 25 && Math.abs(a.d - b.d) > 1e-9) {
+        const t = a.t + (b.t - a.t) * (d - a.d) / (b.d - a.d);
+        if (best == null || t < best) best = t;
+      }
+    }
+    return best;
+  }
+
+  /* --- 操作パネル --- */
+  ui.buttons(ctx.controls, '表示', []);
+  ui.toggle(ctx.controls, { label: 'P波（青）', checked: showP, onChange: v => showP = v });
+  ui.toggle(ctx.controls, { label: 'S波（赤）', checked: showS, onChange: v => showS = v });
+  ui.toggle(ctx.controls, { label: '波面', checked: showFront, onChange: v => showFront = v });
+  ui.toggle(ctx.controls, { label: 'シャドーゾーン', checked: showShadow, onChange: v => showShadow = v });
+  ui.sep(ctx.controls);
+  const sD = ui.slider(ctx.controls, { label: '震源の深さ', min: 0, max: 700, step: 5, value: depth, unit: 'km', digits: 0,
+    onInput: v => { depth = v; rebuildRays(); } });
+  sD.el.addEventListener('change', () => rebuildAnalysis());
+  ui.slider(ctx.controls, { label: '時間の倍率', min: 0, max: 2, step: 1, value: 1, fmt: v => ['×10', '×30', '×60'][v],
+    onInput: v => { scale = [10, 30, 60][v]; } });
+  const readShadow = ui.readout(ctx.controls, { label: 'この速度分布から計算した影', value: '計算中…' });
+  const noteWhy = ui.note(ctx.controls, '');
+  ui.note(ctx.controls, '灰色の●＝震源（上下にドラッグで深さを変える）／黄色の●＝観測点（地表をドラッグ）。');
+
+  ui.slider(ctx.detail, { label: '波線の本数', min: 12, max: 72, step: 2, value: nRays, digits: 0,
+    onInput: v => { nRays = Math.round(v); rebuildRays(); } });
+  ui.toggle(ctx.detail, { label: '内核を通る波線（PKIKP）も描く', checked: showInner, onChange: v => { showInner = v; rebuildRays(); } });
+  ui.toggle(ctx.detail, { label: '速度分布 v(r) のグラフ', checked: showVprof,
+    onChange: v => { showVprof = v; cvV.box.hidden = !v; ctx.layout(v ? '2' : '1'); cv.resize(); cvV.resize(); } });
+  ui.note(ctx.detail, 'PKIKP（内核を通る P波）は、実際にはシャドーゾーンの中にも弱くとどく。「影」は波がまったく来ない場所ではなく、マントルだけを通ってきた P が来ない場所。既定で省略しているのは波線が混み合って見にくくなるためで、上のチェックを入れれば描かれる。外核の表面での反射（PcP など）はこのシミュレーションでは扱っていない。');
+  ui.note(ctx.detail, '速度分布は PREM（Dziewonski &amp; Anderson 1981）の値をそのまま折れ線で近似したもの。地殻・海洋だけは省略し、最上部マントルの値で代表させている（厚さ40 kmほどなので角距離への影響は 0.1° 未満）。速度を教科書の 103° に合うように書きかえることはしていない。');
+
+  /* --- ドラッグできる点 --- */
+  cv.addHandle({ color: '#dfe9e3', size: 8, label: '震源',
+    get: () => ({ x: 0, y: ER - depth }),
+    set: (x, y) => { depth = clamp(ER - Math.hypot(x, y), 0, 700); sD.set(depth, true); rebuildRays(); },
+    onEnd: () => rebuildAnalysis() });
+  cv.addHandle({ color: C.yellow, size: 8, label: '観測点',
+    get: () => ({ x: ER * Math.sin(obsTh), y: ER * Math.cos(obsTh) }),
+    set: (x, y) => { obsTh = Math.atan2(x, y); } });
+
+  /* --- 地球断面の描画 --- */
+  const LAY = [
+    { r: ER,     fill: '#3b2d22', stroke: '#7a5f47', label: 'マントル（固体）', lr: 5000, lt: 236 },
+    { r: R_CMB,  fill: '#5d3410', stroke: '#c2701f', label: '外核（液体）',      lr: 2450, lt: 236 },
+    { r: R_ICB,  fill: '#c8912f', stroke: '#ffd166', label: '内核（固体）',      lr: 640,  lt: 236 }
+  ];
+  function drawEarth(t) {
+    const te = t * scale;                       // 実際の地震の時刻 [s]
+    cv.clear();
+    // 円が切れないよう「縦」に合わせて収める。横に余る分だけ円を左へ寄せ、右側を情報パネルに使う
+    const need = ER * 1.20, aspect = cv.iw / Math.max(1, cv.ih);
+    const halfW = need * Math.max(1, aspect);
+    cv.setViewIso((halfW - need) * 0.5, 0, halfW);
+    for (const L of LAY) cv.circle(0, 0, L.r, { fill: L.fill, color: L.stroke, width: 1.5 });
+    // 角距離の目盛り（影ラベルと重なる角度は数値を省く）
+    const pMid = BND ? (BND.pStart + BND.pEnd) / 2 : -99, sMid = BND ? (BND.sStart + 178) / 2 : -99;
+    for (let d = 0; d <= 180; d += 30) {
+      const hide = showShadow && BND && ((showP && Math.abs(d - pMid) < 10) || (showS && Math.abs(d - sMid) < 10));
+      for (const sg of [1, -1]) {
+        if (d === 0 && sg < 0) continue; if (d === 180 && sg < 0) continue;
+        const th = sg * d / DEG, sx = Math.sin(th), cy = Math.cos(th);
+        cv.line(ER * sx, ER * cy, ER * 1.035 * sx, ER * 1.035 * cy, { color: C.guide, width: 1, alpha: .55 });
+        if (!hide) cv.text(d + '°', ER * 1.09 * sx, ER * 1.09 * cy, { color: C.muted, size: 11, bg: 'rgba(2,5,3,0.6)' });
+      }
+    }
+    // シャドーゾーン
+    if (showShadow && BND) {
+      const band = (d1, d2, sg, r0, r1) => {
+        const p = [], n = Math.max(3, Math.round(Math.abs(d2 - d1)));
+        for (let i = 0; i <= n; i++) { const th = sg * (d1 + (d2 - d1) * i / n) / DEG; p.push([r1 * Math.sin(th), r1 * Math.cos(th)]); }
+        for (let i = n; i >= 0; i--) { const th = sg * (d1 + (d2 - d1) * i / n) / DEG; p.push([r0 * Math.sin(th), r0 * Math.cos(th)]); }
+        return p;
+      };
+      for (const sg of [1, -1]) {
+        if (showS) cv.plotPts(band(BND.sStart, 180, sg, ER * 0.895, ER * 0.955), { color: 'none', fill: hexA(C.wave2, 0.34), close: true });
+        if (showP) cv.plotPts(band(BND.pStart, BND.pEnd, sg, ER * 0.965, ER * 1.028), { color: 'none', fill: hexA(C.wave1, 0.42), close: true });
+      }
+      const edge = (d, col) => { const th = d / DEG;
+        for (const sg of [1, -1]) { const sx2 = sg * Math.sin(th), cy2 = Math.cos(th);
+          cv.line(ER * 0.96 * sx2, ER * 0.96 * cy2, ER * 1.06 * sx2, ER * 1.06 * cy2, { color: col, width: 1.5, alpha: .9 });
+          cv.text(fmt(d, 0) + '°', ER * 1.13 * sx2, ER * 1.13 * cy2, { color: col, size: 11, bold: true }); } };
+      if (showP) { edge(BND.pStart, C.wave1); edge(BND.pEnd, C.wave1); }
+      if (showS && !showP) edge(BND.sStart, C.wave2);
+      const mid = (BND.pStart + BND.pEnd) / 2 / DEG;
+      if (showP) cv.text('P波の影', ER * 0.997 * Math.sin(mid), ER * 0.997 * Math.cos(mid), { color: C.wave1, bold: true, size: 12 });
+      const ms = (BND.sStart + 178) / 2 / DEG;
+      if (showS) cv.text('S波の影', ER * 0.925 * Math.sin(ms), ER * 0.925 * Math.cos(ms), { color: C.wave2, bold: true, size: 12 });
+    }
+    // 波線
+    const drawSet = (list, color) => {
+      for (const r of list) for (const sg of [1, -1]) {
+        const pts = sg === 1 ? r.path : r.pathM;
+        cv.plotPts(pts, { color, width: 1.3, alpha: 0.62 });
+        if (r.end === 'cmb' || r.end === 'tir' || r.end === 'icb') {
+          const q = pts[pts.length - 1];
+          cv.text('×', q[0], q[1], { color, bold: true, size: 13, bg: false });
+        }
+      }
+    };
+    if (showS) drawSet(RAYS.S, C.wave2);
+    if (showP) drawSet(RAYS.P, C.wave1);
+    // 波面（各波線上で τ = te となる点をつなぐ）
+    if (showFront) {
+      const front = (list, color) => {
+        const pts = [];
+        for (const r of list) {
+          const p = r.path; let hit = null;
+          for (let i = 1; i < p.length; i++) if (p[i - 1][2] <= te && te <= p[i][2]) {
+            const f = (te - p[i - 1][2]) / Math.max(1e-9, p[i][2] - p[i - 1][2]);
+            hit = [p[i - 1][0] + (p[i][0] - p[i - 1][0]) * f, p[i - 1][1] + (p[i][1] - p[i - 1][1]) * f];
+            break;
+          }
+          pts.push(hit);
+        }
+        for (const sg of [1, -1]) {
+          let run = [];
+          const flush = () => { if (run.length > 1) cv.plotPts(run, { color, width: 3, alpha: 0.95 }); run = []; };
+          for (let i = 0; i < pts.length; i++) {
+            const h = pts[i];
+            if (!h) { flush(); continue; }
+            const q = [sg * h[0], h[1]];
+            if (run.length && Math.hypot(q[0] - run[run.length - 1][0], q[1] - run[run.length - 1][1]) > 1400) flush();
+            run.push(q);
+          }
+          flush();
+        }
+      };
+      if (showS) front(RAYS.S, C.wave2);
+      if (showP) front(RAYS.P, C.wave1);
+    }
+    // 層ラベル
+    for (const L of LAY) { const th = L.lt / DEG; cv.text(L.label, L.lr * Math.sin(th), L.lr * Math.cos(th), { color: '#ffe6c4', bold: true, size: 12 }); }
+    cv.drawHandles();
+    // 簡易地震計＋読み取りパネル（広いときは右の余白、狭いときは左下）
+    const dObs = Math.abs(obsTh) * DEG, tp = firstArrival(ARR.P, dObs), ts = firstArrival(ARR.S, dObs);
+    const g = cv.ctx, right = cv.pad.l + cv.iw, rEdge = cv.px(ER * 1.16);
+    const wide = (right - rEdge) > 220;
+    if (!wide) { readObs.set(`Δ = ${fmt(dObs, 1)}°　P到達 ${tp == null ? '— ' : fmt(tp, 0) + ' s'}　S到達 ${ts == null ? '—（Sのシャドーゾーン）' : fmt(ts, 0) + ' s'}`);
+      readPS.set(tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '測定できない');
+      cv.overlay.textContent = '地震の時刻 ' + fmt(te, 0) + ' s（×' + scale + '）';
+      cv.overlayTL.textContent = '模式図（外核＝深さ2891 km〜／内核＝深さ5150 km〜）';
+      return; }
+    const W = wide ? Math.min(330, right - rEdge - 12) : 218;
+    const H = wide ? 200 : 54;
+    const bx = wide ? right - W - 6 : cv.pad.l + 8;
+    const by = wide ? cv.pad.t + 10 : cv.h - cv.pad.b - H - 6;
+    g.save();
+    g.fillStyle = 'rgba(2,10,6,0.86)'; g.strokeStyle = C.line; g.lineWidth = 1;
+    g.fillRect(bx, by, W, H); g.strokeRect(bx, by, W, H);
+    g.fillStyle = C.text; g.font = 'bold 12px system-ui,sans-serif'; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+    g.fillText('観測点の地震計', bx + 10, by + 17);
+    const TMAX = 1600, axY = by + (wide ? 62 : H - 12), x0 = bx + 12, x1 = bx + W - 12;
+    const xOf = ss => x0 + (x1 - x0) * clamp(ss / TMAX, 0, 1);
+    g.strokeStyle = C.axis; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, axY); g.lineTo(x1, axY); g.stroke();
+    const mark = (ss, col, lab) => { if (ss == null) return; const X = xOf(ss); g.strokeStyle = col; g.lineWidth = 2.5; g.beginPath(); g.moveTo(X, axY); g.lineTo(X, axY - 22); g.stroke(); g.fillStyle = col; g.font = 'bold 12px system-ui,sans-serif'; g.textAlign = 'center'; g.fillText(lab, X, axY - 26); };
+    mark(tp, C.wave1, 'P'); mark(ts, C.wave2, 'S');
+    if (tp != null && ts != null) { g.fillStyle = hexA(C.yellow, 0.18); g.fillRect(xOf(tp), axY - 16, xOf(ts) - xOf(tp), 16); }
+    const Xc = xOf(te); g.strokeStyle = C.yellow; g.lineWidth = 1.5; g.beginPath(); g.moveTo(Xc, axY + 5); g.lineTo(Xc, axY - 30); g.stroke();
+    g.fillStyle = C.muted; g.font = '10px system-ui,sans-serif'; g.textAlign = 'left'; g.fillText('0', x0, axY + 12); g.textAlign = 'right'; g.fillText(TMAX + ' s', x1, axY + 12);
+    if (wide) {
+      g.textAlign = 'left'; g.font = '12px system-ui,sans-serif';
+      const li = (txt, col, k) => { g.fillStyle = col; g.fillText(txt, bx + 10, by + 92 + k * 18); };
+      li('角距離 Δ = ' + fmt(dObs, 1) + '°', C.yellow, 0);
+      li('P 到達 ' + (tp == null ? '—' : fmt(tp, 0) + ' s'), C.wave1, 1);
+      li('S 到達 ' + (ts == null ? '— （Sのシャドーゾーン）' : fmt(ts, 0) + ' s'), C.wave2, 2);
+      g.fillStyle = C.text; g.font = 'bold 12px system-ui,sans-serif';
+      g.fillText('初期微動継続時間 S−P = ' + (tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '—'), bx + 10, by + 92 + 3 * 18);
+      if (BND) { g.fillStyle = C.muted; g.font = '11px system-ui,sans-serif';
+        g.fillText('影：P ' + fmt(BND.pStart, 1) + '°〜' + fmt(BND.pEnd, 1) + '°／S ' + fmt(BND.sStart, 1) + '°〜', bx + 10, by + 92 + 4 * 18);
+        g.fillText('波線の計算値。回り込む回折波は含まない', bx + 10, by + 92 + 5 * 18); }
+    }
+    g.restore();
+    cv.overlay.textContent = '地震の時刻 ' + fmt(te, 0) + ' s（実時間の×' + scale + '）';
+    cv.overlayTL.textContent = '模式図（層の厚さは実際の比率）　外核の境界＝深さ2891 km　内核の境界＝深さ5150 km　速度分布は PREM（地殻のみ省略）';
+    readObs.set(`Δ = ${fmt(dObs, 1)}°　P到達 ${tp == null ? '— ' : fmt(tp, 0) + ' s'}　S到達 ${ts == null ? '—（Sのシャドーゾーン）' : fmt(ts, 0) + ' s'}`);
+    readPS.set(tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '測定できない');
+  }
+  function drawVprof() {
+    const c = cvV; c.clear(); c.setView({ x0: 0, x1: 14.5, y0: 0, y1: 6500 });
+    c.axes({ xLabel: 'v [km/s]', yLabel: 'r [km]', xStep: 2, yStep: 1000 });
+    c.clip(() => {
+      for (const [kind, col] of [['P', C.wave1], ['S', C.wave2]]) {
+        for (const lay of ['mantle', 'outer', 'inner']) {
+          const kn = VMODEL[kind][lay]; if (!kn) continue;
+          c.plotPts(kn.map(q => [q[1], q[0]]), { color: col, width: 2.5 });
+        }
+      }
+      for (const r of [R_CMB, R_ICB]) c.line(0, r, 14.5, r, { color: C.guide, width: 1, dash: [4, 4], alpha: .6 });
+      c.text('外核（S波は0）', 11.5, R_CMB - 260, { color: C.muted, size: 11 });
+    });
+  }
+
+  ui.sep(ctx.controls);
+  const readObs = ui.readout(ctx.controls, { label: '観測点', value: '' });
+  const readPS = ui.readout(ctx.controls, { label: '初期微動継続時間 S−P', value: '' });
+
+  rebuildAll();
+  return { draw(t) { drawEarth(t); if (!cvV.box.hidden) drawVprof(); } };
+}
+
+/* ===================================================================
+ *  タブ8  縦波の横波表示
+ * =================================================================== */
+function buildLTG(ctx) {
+  let N = 41, rev = false, showLabels = true, showGuides = true, showVel = false;
+  let rot = 0, rotTarget = 0, rotT0 = 0, rotFrom = 0;
+  const ROTMS = 1300;
+  ctx.layout('1'); ctx.stage.classList.add('rows4');
+
+  const c1 = ctx.canvas({ title: '① 縦波（媒質の玉）　x軸の正の向き：右 →　玉が混みあう所＝密（おし縮められて高圧）／すく所＝疎（低圧）' });
+  const c2 = ctx.canvas({ title: '② 各点の変位を矢印で（右向きを正）' });
+  const c3 = ctx.canvas({ title: '③ 矢印を90°回すと「横波表示」になる（矢印の長さ＝変位の大きさ。回しても長さは変わらない）' });
+  const c4 = ctx.canvas({ title: '④ 疎密（圧力）のグラフ　Δρ ∝ −∂ξ/∂x' });
+
+  const P = paramControls(ctx.controls, () => {});
+  ui.sep(ctx.controls);
+  const rotBtn = ui.button(ctx.controls, { label: '矢印を回す ↻', className: 'primary', onClick: () => {
+    rotFrom = rot; rotTarget = (rotTarget === 90 ? 0 : 90); rotT0 = performance.now();
+    rotBtn.textContent = rotTarget === 90 ? '矢印を戻す ↺' : '矢印を回す ↻';
+  } });
+  ui.note(ctx.controls, '回すのは手品ではない：右向きの変位を上向きに、左向きの変位を下向きに写し替えているだけ。矢印の長さ（変位の大きさ）は変えていない。左右のずれは重なって見えないので、縦にそろえて見やすくする約束。');
+  ui.toggle(ctx.controls, { label: '疎・密ラベル', checked: showLabels, onChange: v => showLabels = v });
+  ui.toggle(ctx.controls, { label: '疎密の位置の縦線', checked: showGuides, onChange: v => showGuides = v });
+  ui.note(ctx.controls, '「密」は変位が ＋→− に変わる点。そこでは左どなりの玉が右へ、右どなりの玉が左へずれている＝両側から玉が寄ってくるから混みあう（②の太い2本の矢印）。「疎」はその逆で、両側へ離れていくのですいてくる。');
+
+  const revBtn = ui.button(ctx.detail, { label: '正の向きを反転する（→ ⇄ ←）', onClick: () => {
+    rev = !rev; revBtn.classList.toggle('active', rev);
+    revNote.textContent = rev ? '変位の正の向き：左 ←（反転中）— ②の矢印と③の横波表示は上下反転する。①の玉の位置と④の疎密は動かない：正の向きは人間が決めた約束にすぎず、玉が実際にどこに並んでいるかは約束のとり方に関係ないから。'
+                              : '変位の正の向き：右 →（標準）';
+  } });
+  const revNote = ui.note(ctx.detail, '変位の正の向き：右 →（標準）');
+  ui.toggle(ctx.detail, { label: '媒質の速度矢印（①）', checked: showVel, onChange: v => showVel = v });
+  ui.slider(ctx.detail, { label: '玉の数 N', min: 21, max: 61, step: 2, value: N, digits: 0, onInput: v => N = Math.round(v) });
+
+  const sgn = () => (rev ? -1 : 1);
+  const VX0 = X0 - 0.45, VX1 = X1 + 0.45;
+
+
+  function guides(cv, t, y0, y1) {
+    if (!showGuides) return;
+    for (const x of denseX(t)) cv.line(x, y0, x, y1, { color: C.dens, width: 1.3, alpha: .45, dash: [4, 4] });
+    for (const x of rareX(t))  cv.line(x, y0, x, y1, { color: SPARSE, width: 1.1, alpha: .3, dash: [2, 5] });
+  }
+
+  const BY1 = 0.5;
+  function draw1(t) {
+    const cv = c1; cv.clear();
+    cv.setView({ x0: VX0, x1: VX1, y0: 0.02, y1: 1.22 });
+    cv.axes({ xLabel: 'x [m]', xStep: 1, yTicks: false, yAxis: false, yStep: 9 });
+    const xs = ballXs(N), mk = flankMarks(xs, t, showLabels);
+    cv.clip(() => {
+      guides(cv, t, 0.05, 0.92);
+      for (const x of xs) cv.dot(x, BY1 - 0.28, 1.5, { color: C.muted, alpha: .5 });
+      if (showVel) { const k = 0.32 / (S.A * TAU / S.T) * Math.min(S.A, 0.3); for (const x of xs) { const p = x + xi(x, t); cv.arrow(p, BY1 + 0.22, p + vxi(x, t) * k, BY1 + 0.22, { color: C.vel, width: 1.5, head: 5, alpha: .85, zeroDot: true }); } }
+      // 密・疎をはさむ2つの玉は大きく描く（②の太い矢印と同じ玉）
+      xs.forEach((x, i) => { const m = mk.get(i);
+        cv.dot(x + xi(x, t), BY1, m ? 6.5 : 4.5, { color: C.wave, stroke: m ? (m === 'd' ? C.dens : SPARSE) : '#04140b', width: m ? 2 : 1 }); });
+      if (showLabels) {
+        for (const x of denseX(t)) cv.text('密', x, BY1 + 0.42, { color: C.dens, bold: true, size: 14 });
+        for (const x of rareX(t))  cv.text('疎', x, BY1 + 0.42, { color: SPARSE, bold: true, size: 14 });
+      }
+    });
+  }
+
+  function draw2(t) {
+    const cv = c2; cv.clear();
+    const yM = Math.max(S.A * 1.5, 0.12);
+    cv.setView({ x0: VX0, x1: VX1, y0: -yM, y1: yM });
+    cv.axes({ xStep: 1, xTicks: false, yTicks: false, yStep: yM });
+    const xs = ballXs(N), mk = flankMarks(xs, t, showLabels);
+    cv.clip(() => {
+      guides(cv, t, -yM, yM);
+      xs.forEach((x, i) => {
+        const d = sgn() * xi(x, t), m = mk.get(i);
+        cv.arrow(x, 0, x + d, 0, { color: d >= 0 ? C.wave : C.wave1, width: m ? 3.6 : 2, head: m ? 9 : 7, zeroDot: true, alpha: m ? 1 : 0.75 });
+      });
+      if (showLabels) {
+        for (const x of denseX(t)) cv.text('寄る', x, yM * 0.5, { color: C.dens, bold: true, size: 11 });
+        for (const x of rareX(t))  cv.text('離れる', x, -yM * 0.5, { color: SPARSE, bold: true, size: 11 });
+      }
+    });
+    cv.overlayTL.textContent = (rev ? '変位の正の向き：左 ←' : '変位の正の向き：右 →')
+      + '　太い2本＝密・疎の位置をはさむ玉（密では向かい合い、疎では離れる）';
+  }
+
+  function draw3(t) {
+    const cv = c3; cv.clear();
+    cv.setViewIso((VX0 + VX1) / 2, 0, (VX1 - VX0) / 2);
+    cv.axes({ xStep: 1, xTicks: false, yStep: 0.2 });
+    const a = rot / DEG, ca = Math.cos(a), sa = Math.sin(a);
+    cv.clip(() => {
+      guides(cv, t, cv.view.y0, cv.view.y1);
+      const xs = ballXs(N), mk = flankMarks(xs, t, showLabels), tips = [];
+      for (const x of xs) {
+        const d = sgn() * xi(x, t);
+        tips.push([x + d * ca, d * sa]);
+      }
+      if (rot > 1) cv.plotPts(tips, { color: C.wave, width: 2.5, alpha: clamp(rot / 90, 0, 1) });
+      // 矢印の色は②と同じ（＋＝緑／−＝青）。回しても色も長さも変えない＝写し替えただけ
+      xs.forEach((x, i) => { const d = sgn() * xi(x, t), m = mk.get(i);
+        cv.arrow(x, 0, tips[i][0], tips[i][1], { color: d >= 0 ? C.wave : C.wave1, width: m ? 3.2 : 1.8, head: m ? 8 : 6, alpha: m ? 1 : .8, zeroDot: true }); });
+      if (rot > 88 && showLabels) {
+        for (const x of denseX(t)) cv.text('密', x, cv.view.y1 * 0.86, { color: C.dens, bold: true, size: 14 });
+        for (const x of rareX(t))  cv.text('疎', x, cv.view.y1 * 0.86, { color: SPARSE, bold: true, size: 14 });
+      }
+    });
+    cv.overlayTL.textContent = '右向きの変位を上向きに、左向きの変位を下向きに写し替えているだけ（長さはそのまま・図を見やすくするための約束）';
+    cv.overlay.textContent = rot > 88 ? '回転 90°　緑の曲線＝矢印の先をつないだもの＝横波表示' : '回転 ' + fmt(rot, 0) + '°';
+  }
+
+  function draw4(t) {
+    const cv = c4; cv.clear();
+    cv.setView({ x0: VX0, x1: VX1, y0: -1.35, y1: 1.35 });
+    cv.axes({ xLabel: 'x [m]', yLabel: '圧力の変化', xStep: 1, yStep: 1, yTick: v => v > 0 ? '密' : (v < 0 ? '疎' : '0') });
+    cv.clip(() => {
+      guides(cv, t, -1.3, 1.3);
+      // Δρ ∝ −∂ξ/∂x を最大値1に規格化 → cos φ
+      cv.plot(x => -dxi(x, t) / (S.A * TAU / S.lambda), { color: C.dens, width: 2.8, x0: X0, x1: X1 });
+    });
+    cv.overlayTL.textContent = '∂ξ/∂x が負＝後ろの玉が追いつく＝混みあう。だから密は −∂ξ/∂x が最大の点';
+  }
+
+  return {
+    onShow() { P.sync(); },
+    draw(t) {
+      if (rot !== rotTarget) {
+        const k = clamp((performance.now() - rotT0) / ROTMS, 0, 1);
+        const e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+        rot = rotFrom + (rotTarget - rotFrom) * e;
+        if (k >= 1) rot = rotTarget;
+      }
+      draw1(t); draw2(t); draw3(t); draw4(t);
+      window.__nami_debug = Object.assign(window.__nami_debug || {}, {
+        ltg: {
+          t, lambda: S.lambda, T: S.T, A: S.A, rev, rot,
+          dense: denseX(t), rare: rareX(t),
+          dxi: (x) => dxi(x, t), xi: (x) => xi(x, t), sgn: sgn(),
+          flank: (() => { const xs = ballXs(N); return { xs, d: flankPairs(xs, denseX(t)), r: flankPairs(xs, rareX(t)) }; })()
+        }
+      });
+    }
+  };
+}
+
+/* =================================================================== */
+Nami.init({
+  title: 'C 縦波',
+  footer: '⑥ 同じ媒質を横波／縦波で切り替え　⑦ 地球内部の波線追跡（球対称スネルの法則）　⑧ 縦波を横波表示に直す手順',
+  tabs: [
+    { id: 'lt',      label: '6 縦波と横波',       period: () => S.T, build: buildLT },
+    { id: 'seismic', label: '7 地震のP波・S波',   period: () => 60,  build: buildSeismic },
+    { id: 'ltgraph', label: '8 縦波の横波表示',   period: () => S.T, build: buildLTG }
+  ]
+});
+})();
+</script></body></html>
