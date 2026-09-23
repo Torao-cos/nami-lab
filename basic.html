@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>A 波の基本 - なみラボ</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .stage.cols2 .panel{min-height:240px}
+  #shmDetail .panel{min-height:200px}
+</style>
+</head>
+<body>
+<script src="common.js"></script>
+<script>
+(() => {
+'use strict';
+const { C, TAU, ui, Wave, fmt, clamp, recorder, el } = Nami;
+
+/* 上面図の濃淡塗り（低解像度 ImageData → 拡大） */
+function shadeField(cv, fn, scale = 3) {
+  const w = Math.max(2, Math.floor(cv.iw / scale)), h = Math.max(2, Math.floor(cv.ih / scale));
+  if (!cv._off || cv._off.width !== w || cv._off.height !== h) { cv._off = document.createElement('canvas'); cv._off.width = w; cv._off.height = h; cv._img = cv._off.getContext('2d').createImageData(w, h); }
+  const d = cv._img.data;
+  for (let j = 0; j < h; j++) {
+    const y = cv.wy(cv.pad.t + (j + .5) * cv.ih / h);
+    for (let i = 0; i < w; i++) {
+      const x = cv.wx(cv.pad.l + (i + .5) * cv.iw / w);
+      const s = clamp(fn(x, y), -1, 1); const k = (j * w + i) * 4;
+      if (s >= 0) { d[k] = 2 + 82 * s; d[k + 1] = 5 + 200 * s; d[k + 2] = 3 + 100 * s; }
+      else { d[k] = 2 + 18 * -s; d[k + 1] = 5 + 40 * -s; d[k + 2] = 3 + 90 * -s; }
+      d[k + 3] = 255;
+    }
+  }
+  cv._off.getContext('2d').putImageData(cv._img, 0, 0);
+  cv.ctx.imageSmoothingEnabled = true;
+  cv.ctx.drawImage(cv._off, cv.pad.l, cv.pad.t, cv.iw, cv.ih);
+}
+const S = { L: 2, T: 2, A: 1 };
+const sliders = (parent, onChange, opts = {}) => ({
+  L: ui.slider(parent, { label: '波長 λ', min: 0.5, max: 5, step: 0.1, value: S.L, unit: 'm', onInput: v => { S.L = v; onChange && onChange(); } }),
+  T: ui.slider(parent, { label: '周期 T', min: 0.5, max: 5, step: 0.1, value: S.T, unit: 's', onInput: v => { S.T = v; onChange && onChange(); } }),
+  A: ui.slider(parent, { label: '振幅 A', min: 0.2, max: opts.Amax || 1.5, step: 0.1, value: S.A, unit: 'm', onInput: v => { S.A = v; onChange && onChange(); } })
+});
+
+Nami.init({
+  title: 'A 波の基本',
+  tabs: [
+    /* ============ 1 波面と射線 ============ */
+    {
+      id: 'wavefront', label: '1 波面と射線', period: () => S.T,
+      build(ctx) {
+        ctx.layout('2x2');
+        const st = { rays: true, trough: false, decay: false, cutY: 0, cutAng: 0.35 };
+        const cvP = ctx.canvas({ title: '平面波（上から見た水面）' });
+        const cvPg = ctx.canvas({ title: '平面波 y-x グラフ（カット線に沿って）' });
+        const cvS = ctx.canvas({ title: '球面波（上から見た水面）' });
+        const cvSg = ctx.canvas({ title: '球面波 y-r グラフ（射線に沿って）' });
+        [cvP, cvS].forEach(c => c.setPad({ l: 30, r: 12, t: 12, b: 26 }));
+        const XW = 10, RW = 6;
+        cvP.addHandle({ get: () => ({ x: XW * 0.5, y: st.cutY }), set: (x, y) => { st.cutY = clamp(y, cvP.view.y0 + .3, cvP.view.y1 - .3); }, color: C.yellow, label: 'カット線' });
+        cvS.addHandle({ get: () => ({ x: RW * Math.cos(st.cutAng), y: RW * Math.sin(st.cutAng) }), set: (x, y) => { st.cutAng = Math.atan2(y, x); }, color: C.yellow, label: '射線を回す' });
+        const c = ctx.controls;
+        sliders(c);
+        ui.sep(c);
+        ui.toggle(c, { label: '射線を表示', checked: true, onChange: v => st.rays = v });
+        ui.note(c, '波面＝同じ振動状態（ここでは山）の点を結んだ線。射線＝波の進む向きを示す線で、波面に垂直。上段の平面波は左から右へ、下段の球面波は中心から広がる。右のグラフは黄色い線に沿って水面を切った断面。');
+        ui.toggle(ctx.detail, { label: '谷の波面（破線）も表示', checked: false, onChange: v => st.trough = v });
+        ui.toggle(ctx.detail, { label: '球面波の振幅の減衰（1/√r）を入れる', checked: false, onChange: v => st.decay = v });
+        ui.note(ctx.detail, '教科書の図では球面波の振幅は一定として描く。実際の水面波はエネルギーが広がるため遠くほど振幅が小さくなる（2次元では 1/√r）。');
+        const ampS = r => st.decay ? S.A * Math.min(1, Math.sqrt((S.L / 2) / Math.max(r, 1e-6))) : S.A;
+        function crests(t) { // 山の位置（位相 t/T − x/λ = 1/4 + k → x）
+          const out = []; const base = S.L * (t / S.T - 0.25);
+          for (let k = Math.floor((base - 0) / S.L) - 8; k <= Math.floor(base / S.L) + 1; k++) { const x = base - k * S.L; if (x >= 0 && x <= Math.max(XW, RW) + S.L) out.push(x); }
+          return out;
+        }
+        return {
+          draw(t) {
+            const ph = t / S.T;
+            /* --- 平面波 上面 --- */
+            cvP.clear(); cvP.setViewIso(XW / 2, 0, XW / 2);
+            shadeField(cvP, (x, y) => Math.sin(TAU * (ph - x / S.L)));
+            cvP.clip(() => {
+              crests(t).forEach(x => { if (x <= XW) cvP.line(x, cvP.view.y0, x, cvP.view.y1, { color: C.wave, width: 2.5 }); if (st.trough && x - S.L / 2 >= 0) cvP.line(x - S.L / 2, cvP.view.y0, x - S.L / 2, cvP.view.y1, { color: C.wave1, width: 1.5, dash: [4, 4] }); });
+              if (st.rays) { const n = 4; for (let i = 0; i < n; i++) { const y = cvP.view.y0 + (i + .5) * (cvP.view.y1 - cvP.view.y0) / n; cvP.arrow(0.4, y, XW - 0.4, y, { color: C.guide, width: 1.5, head: 10 }); } }
+              cvP.line(0, st.cutY, XW, st.cutY, { color: C.yellow, width: 2, dash: [8, 5] });
+            });
+            cvP.axes({ grid: false, yTicks: false, xAxis: false, yAxis: false, xLabel: 'x [m]' });
+            cvP.textPx('波面（山）', cvP.pad.l + 6, cvP.pad.t + 6, { align: 'left', baseline: 'top', color: C.wave, bold: true });
+            if (st.rays) cvP.textPx('射線', cvP.pad.l + cvP.iw - 6, cvP.pad.t + 6, { align: 'right', baseline: 'top', color: C.guide, bold: true });
+            cvP.drawHandles();
+            /* --- 平面波 y-x --- */
+            cvPg.clear(); cvPg.setView({ x0: 0, x1: XW, y0: -1.6, y1: 1.6 });
+            cvPg.axes({ xLabel: 'x [m]', yLabel: 'y [m]', yStep: 0.5 });
+            cvPg.clip(() => { cvPg.plot(x => S.A * Math.sin(TAU * (ph - x / S.L)), { color: C.wave, width: 2.5 }); });
+            crests(t).forEach(x => { if (x <= XW) cvPg.dot(x, S.A, 4, { color: C.wave }); });
+            cvPg.textPx('カット線（黄）に沿った断面', cvPg.pad.l + cvPg.iw - 4, cvPg.pad.t + 4, { align: 'right', baseline: 'top', color: C.yellow });
+            /* --- 球面波 上面 --- */
+            cvS.clear(); cvS.setViewIso(0, 0, RW * 1.05);
+            shadeField(cvS, (x, y) => { const r = Math.hypot(x, y); return (ampS(r) / S.A) * Math.sin(TAU * (ph - r / S.L)); });
+            cvS.clip(() => {
+              crests(t).forEach(r => { if (r > 0) cvS.circle(0, 0, r, { color: C.wave, width: 2.5 }); if (st.trough && r - S.L / 2 > 0) cvS.circle(0, 0, r - S.L / 2, { color: C.wave1, width: 1.5, dash: [4, 4] }); });
+              if (st.rays) { for (let i = 0; i < 12; i++) { const a = i * TAU / 12; cvS.arrow(0.6 * Math.cos(a), 0.6 * Math.sin(a), RW * 0.95 * Math.cos(a), RW * 0.95 * Math.sin(a), { color: C.guide, width: 1.5, head: 10 }); } }
+              cvS.line(0, 0, RW * Math.cos(st.cutAng), RW * Math.sin(st.cutAng), { color: C.yellow, width: 2, dash: [8, 5] });
+              cvS.dot(0, 0, 5, { color: C.yellow, stroke: '#000' });
+            });
+            cvS.axes({ grid: false, yTicks: false, xTicks: false, xAxis: false, yAxis: false });
+            cvS.textPx('波源', cvS.px(0), cvS.py(0), { dy: 14, color: C.yellow });
+            cvS.textPx('波面（山）', cvS.pad.l + 6, cvS.pad.t + 6, { align: 'left', baseline: 'top', color: C.wave, bold: true });
+            cvS.drawHandles();
+            /* --- 球面波 y-r --- */
+            cvSg.clear(); cvSg.setView({ x0: 0, x1: RW, y0: -1.6, y1: 1.6 });
+            cvSg.axes({ xLabel: 'r [m]（波源からの距離）', yLabel: 'y [m]', yStep: 0.5 });
+            cvSg.clip(() => { cvSg.plot(r => ampS(r) * Math.sin(TAU * (ph - r / S.L)), { color: C.wave, width: 2.5 }); });
+            crests(t).forEach(r => { if (r > 0 && r <= RW) cvSg.dot(r, ampS(r), 4, { color: C.wave }); });
+            cvSg.textPx('射線（黄）に沿った断面 θ = ' + fmt(st.cutAng * 180 / Math.PI, 0) + '°', cvSg.pad.l + cvSg.iw - 4, cvSg.pad.t + 4, { align: 'right', baseline: 'top', color: C.yellow });
+          }
+        };
+      }
+    },
+
+    /* ============ 2 単振動と正弦波 ============ */
+    {
+      id: 'shm', label: '2 単振動と正弦波', period: () => S.T,
+      build(ctx) {
+        ctx.layout('2x2');
+        const st = { showArc: true };
+        const cvC = ctx.canvas({ title: '等速円運動と鉛直方向への射影' });
+        const cvR = ctx.canvas({ title: 'y-t グラフ（射影点の変位を時間に沿って記録）' });
+        const detailWrap = el('div', 'stage'); detailWrap.id = 'shmDetail'; detailWrap.hidden = true; ctx.stage.parentElement.insertBefore(detailWrap, ctx.stage.nextSibling);
+        const cvW = new Nami.Canvas(detailWrap, { title: '詳しく: この振動が波として伝わると（x=0 の媒質が上の射影点）', onClick: () => ctx.sim.toggle() });
+        const c = ctx.controls;
+        const sl = sliders(c);
+        sl.L.box.hidden = true; // 円運動タブでは波長は不要（詳しくで使う）
+        ui.sep(c);
+        const ro = ui.readout(c, { label: '現在' });
+        const fo = ui.formula(c, '');
+        ui.note(c, '半径 A の円周上を周期 T で等速円運動する点を、真横（鉛直な直線上）に射影すると、射影点は単振動する。その変位 y を時間 t に対して記録すると正弦波（y-t グラフ）になる。y = A sin θ, θ = 2πt/T。');
+        ui.toggle(ctx.detail, { label: '波として伝わる様子を表示（x=0 の媒質が射影点）', checked: false, onChange: v => { detailWrap.hidden = !v; if (v) sl.L.box.hidden = false; } });
+        ui.toggle(ctx.detail, { label: '位相角 θ の弧を表示', checked: true, onChange: v => st.showArc = v });
+        const YR = 1.75; // 縦レンジ（両パネル共通）
+        return {
+          draw(t) {
+            const th = TAU * t / S.T, y = S.A * Math.sin(th);
+            /* 円運動 */
+            cvC.clear(); cvC.setPad({ l: 36, r: 12, t: 16, b: 32 });
+            // 等方: 縦レンジ ±YR を基準に横を決める
+            const asp = cvC.iw / cvC.ih; cvC.setView({ x0: -YR * asp * 0.55 - 1.0, x1: YR * asp * 0.45 + 0.0, y0: -YR, y1: YR });
+            // 横縮尺を縦に合わせる（円が円に見える）
+            const halfH = YR, halfW = halfH * asp; const cx = halfW * 0.3; cvC.setView({ x0: cx - halfW, x1: cx + halfW, y0: -halfH, y1: halfH });
+            cvC.axes({ grid: false, xTicks: false, xAxis: false, yAxis: false, yLabel: 'y [m]', yStep: 0.5 });
+            const xp = S.A * 1.35 + 0.3; // 射影する鉛直線の x
+            cvC.line(xp, -YR, xp, YR, { color: C.axis, width: 1.5 });
+            cvC.circle(0, 0, S.A, { color: C.guide, width: 1.5, dash: [5, 4] });
+            cvC.line(-S.A * 1.2, 0, S.A * 1.2, 0, { color: C.grid, width: 1 });
+            cvC.line(0, -S.A * 1.2, 0, S.A * 1.2, { color: C.grid, width: 1 });
+            const px = S.A * Math.cos(th), py = y;
+            const thm = th % TAU;
+            if (st.showArc) { cvC.circle(0, 0, S.A * 0.35, { color: C.yellow, width: 2, a0: -thm, a1: 0 }); cvC.text('θ', S.A * 0.55 * Math.cos(thm / 2), S.A * 0.55 * Math.sin(thm / 2), { color: C.yellow, bold: true, size: 15 }); }
+            cvC.line(0, 0, px, py, { color: C.wave1, width: 2 }); cvC.text('A', px / 2, py / 2, { dx: -10, dy: -8, color: C.wave1, bold: true });
+            cvC.line(px, py, cvC.view.x1, py, { color: C.yellow, width: 1.5, dash: [6, 4] });
+            cvC.dot(px, py, 7, { color: C.wave1, stroke: '#000' });
+            cvC.arrow(xp, 0, xp, py, { color: C.wave, width: 3, head: 10, zeroDot: true });
+            cvC.dot(xp, py, 8, { color: C.wave, stroke: '#000' });
+            cvC.text('射影点', xp, py, { dx: -34, color: C.wave, bold: true });
+            cvC.text('y = ' + fmt(y) + ' m', xp, YR - 0.15, { color: C.wave, bold: true, size: 14, align: 'right', dx: -8 });
+            /* y-t 記録 */
+            cvR.clear(); cvR.setPad({ l: 46, r: 14, t: 16, b: 32 });
+            const span = Math.max(3 * S.T, 4); const x0 = Math.max(0, t - span), x1 = x0 + span;
+            cvR.setView({ x0, x1, y0: -YR, y1: YR });
+            cvR.axes({ xLabel: 't [s]', yLabel: 'y [m]', yStep: 0.5 });
+            cvR.clip(() => { cvR.plot(tt => S.A * Math.sin(TAU * tt / S.T), { color: C.wave, width: 2.5, x0: 0, x1: t }); cvR.plot(tt => S.A * Math.sin(TAU * tt / S.T), { color: C.wave, width: 1, alpha: .25, dash: [4, 4], x0: t, x1 }); });
+            cvR.line(x0, y, t, y, { color: C.yellow, width: 1.5, dash: [6, 4] });
+            cvR.dot(t, y, 7, { color: C.wave, stroke: '#000' });
+            cvR.hbracket(Math.max(x0, t - S.T), t, YR - 0.25, 'T = ' + fmt(S.T) + ' s', { color: C.yellow });
+            cvR.vbracket(x0 + span * 0.02, 0, S.A, 'A', { color: C.wave1 });
+            ro.set('θ = ' + fmt(th * 180 / Math.PI % 360, 0) + '°　y = ' + fmt(y) + ' m');
+            fo.set(`y = A sin θ = A sin(2πt/T) = ${fmt(S.A)} × sin(2π × ${fmt(t)} / ${fmt(S.T)}) = <b>${fmt(y)} m</b>　　f = 1/T = <b>${fmt(1 / S.T)} Hz</b>`);
+            /* 詳しく: 進行波 */
+            if (!detailWrap.hidden) {
+              cvW.clear(); cvW.setView({ x0: -0.5, x1: 9.5, y0: -YR, y1: YR }); cvW.axes({ xLabel: 'x [m]', yLabel: 'y [m]', yStep: 0.5 });
+              cvW.clip(() => { cvW.plot(x => (x < 0 ? null : S.A * Math.sin(TAU * (t / S.T - x / S.L))), { color: C.wave, width: 2.5 }); });
+              for (let i = 0; i <= 18; i++) { const x = i * 0.5; cvW.dot(x, S.A * Math.sin(TAU * (t / S.T - x / S.L)), 3, { color: C.muted }); }
+              cvW.dot(0, y, 8, { color: C.wave, stroke: '#000' }); cvW.text('x = 0 の媒質', 0, y, { dx: 46, color: C.wave, bold: true });
+              cvW.textPx('この波は右へ v = λ/T = ' + fmt(S.L / S.T) + ' m/s で進む。各点は同じ単振動を少しずつ遅れて行う', cvW.pad.l + 6, cvW.pad.t + 4, { align: 'left', baseline: 'top', color: C.muted });
+            }
+          }
+        };
+      }
+    },
+
+    /* ============ 3 波の5量 ============ */
+    {
+      id: 'quantities', label: '3 波の5量（λ A T f v）', period: () => S.T,
+      build(ctx) {
+        ctx.layout('1');
+        const st = { xP: 4, ruler: { x: 1, y: -1.35, len: 3 }, showRuler: true, swT0: 0, cntT0: 0, ghost: null, adv: null, showCrest: true };
+        const cv = ctx.canvas({ title: '右へ進む波 y-x グラフ（時刻 t の波形）' });
+        const cvR = ctx.canvas({ title: '点 P の y-t グラフ（P の媒質の変位を記録）' });
+        cv.box.style.minHeight = '270px'; cvR.box.style.minHeight = '170px';
+        cv.addHandle({ get: () => ({ x: st.xP, y: S.A * Math.sin(TAU * (ctx.sim.t / S.T - st.xP / S.L)) }), set: (x) => { st.xP = clamp(x, 0.2, 9.8); }, color: C.yellow, label: 'P（ドラッグ）' });
+        cv.addHandle({ get: () => ({ x: st.ruler.x, y: st.ruler.y }), set: (x, y) => { st.ruler.x = clamp(x, 0, 10 - st.ruler.len); st.ruler.y = clamp(y, -1.7, 1.7); }, color: C.anti, label: '定規' });
+        const c = ctx.controls;
+        const sl = sliders(c);
+        ui.sep(c);
+        ui.button(c, { label: '1周期だけ進める（T 秒）', className: 'primary', onClick: () => { ctx.sim.pause(); st.ghost = ctx.sim.t; st.adv = { t0: ctx.sim.t, start: performance.now() }; } });
+        ui.button(c, { label: '残像を消す', onClick: () => { st.ghost = null; } });
+        ui.sep(c);
+        const sw = ui.readout(c, { label: 'ストップウォッチ' }); ui.button(c, { label: '0 に戻す', onClick: () => { st.swT0 = ctx.sim.t; } });
+        ui.sep(c);
+        const cnt = ui.readout(c, { label: 'P を通過した山' }); ui.button(c, { label: '数え直す', onClick: () => { st.cntT0 = ctx.sim.t; } });
+        ui.sep(c);
+        ui.toggle(c, { label: '定規', checked: true, onChange: v => { st.showRuler = v; cv.handles[1].hidden = !v; } });
+        const fo = ui.formula(c, '');
+        ui.note(c, '波長 λ＝となり合う山と山の距離。振幅 A＝つり合いの位置からの最大のずれ。周期 T＝媒質が1回振動する時間＝山が λ だけ進む時間。振動数 f＝1秒間の振動の回数＝1秒間に P を通過する山の数。速さ v＝山が進む速さ。');
+        ui.select(ctx.detail, { label: '定規の長さ', options: [['1', '1 m'], ['2', '2 m'], ['3', '3 m'], ['5', '5 m']], value: '3', onChange: v => { st.ruler.len = parseFloat(v); } });
+        ui.toggle(ctx.detail, { label: '山の位置に印', checked: true, onChange: v => st.showCrest = v });
+        const yOf = (x, t) => S.A * Math.sin(TAU * (t / S.T - x / S.L));
+        const crestsIn = (t, x0, x1) => { const out = []; const base = S.L * (t / S.T - 0.25); for (let k = Math.floor((base - x1) / S.L) - 1; k <= Math.ceil((base - x0) / S.L) + 1; k++) { const x = base - k * S.L; if (x >= x0 && x <= x1) out.push(x); } return out.sort((a, b) => a - b); };
+        return {
+          onReset() { st.ghost = null; st.adv = null; st.swT0 = 0; st.cntT0 = 0; },
+          draw(t) {
+            /* 「1周期だけ進める」の駆動 */
+            if (st.adv) { const p = clamp((performance.now() - st.adv.start) / 2500, 0, 1); const e = p < .5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2; ctx.sim.setT(st.adv.t0 + S.T * e); t = ctx.sim.t; if (p >= 1) { ctx.sim.setT(st.adv.t0 + S.T); t = ctx.sim.t; st.adv = null; } }
+            cv.clear(); cv.setView({ x0: 0, x1: 10, y0: -1.9, y1: 1.9 }); cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', yStep: 0.5 });
+            cv.clip(() => {
+              if (st.ghost != null) { cv.plot(x => yOf(x, st.ghost), { color: C.ghost, width: 2, dash: [6, 4] }); }
+              cv.plot(x => yOf(x, t), { color: C.wave, width: 3 });
+            });
+            const cr = crestsIn(t, 0, 10);
+            if (st.showCrest) cr.forEach(x => cv.dot(x, S.A, 4, { color: C.wave }));
+            // λ ブラケット: 中央寄りの隣接する山2つ
+            if (cr.length >= 2) { let bi = 0; for (let i = 0; i + 1 < cr.length; i++) if (Math.abs((cr[i] + cr[i + 1]) / 2 - 5) < Math.abs((cr[bi] + cr[bi + 1]) / 2 - 5)) bi = i; cv.hbracket(cr[bi], cr[bi + 1], S.A + 0.25, 'λ = ' + fmt(S.L) + ' m', { color: C.yellow }); }
+            // A ブラケット
+            if (cr.length) { const xa = cr[0] > 0.6 ? cr[0] : (cr[1] || cr[0]); cv.vbracket(xa + 0.12, 0, S.A, 'A = ' + fmt(S.A) + ' m', { color: C.wave1 }); }
+            // 残像の山→現在の山（λ 移動）
+            if (st.ghost != null && !st.adv) { const g = crestsIn(st.ghost, 0, 10); const now = crestsIn(t, 0, 10); if (g.length && now.length) { const gx = g[Math.floor(g.length / 2)]; const nx = now.find(x => x > gx + 1e-6) || null; if (nx != null) { cv.arrow(gx, -S.A - 0.35, nx, -S.A - 0.35, { color: C.yellow, width: 2.5, head: 10 }); cv.text('T = ' + fmt(t - st.ghost) + ' s の間に山が ' + fmt(nx - gx) + ' m 進んだ（= λ）', (gx + nx) / 2, -S.A - 0.6, { color: C.yellow, bold: true, size: 14 }); } } }
+            // 定規
+            if (st.showRuler) { const r = st.ruler; cv.line(r.x, r.y, r.x + r.len, r.y, { color: C.anti, width: 3 }); for (let i = 0; i <= r.len * 10 + 1e-9; i++) { const x = r.x + i / 10; const big = i % 10 === 0, mid = i % 5 === 0; cv.line(x, r.y, x, r.y + (big ? 0.22 : mid ? 0.14 : 0.08), { color: C.anti, width: big ? 2 : 1 }); if (big) cv.text(String(i / 10) + ' m', x, r.y + 0.36, { color: C.anti, size: 12 }); } }
+            // P
+            const yP = yOf(st.xP, t); cv.line(st.xP, -1.9, st.xP, 1.9, { color: C.yellow, width: 1, dash: [4, 4] });
+            cv.drawHandles();
+            /* y-t */
+            cvR.clear();
+            const span = 3 * S.T; const x0 = Math.max(0, t - span);
+            cvR.setView({ x0, x1: x0 + span, y0: -1.6, y1: 1.6 }); cvR.axes({ xLabel: 't [s]', yLabel: 'y [m]', yStep: 0.5 });
+            cvR.clip(() => { cvR.plot(tt => yOf(st.xP, tt), { color: C.yellow, width: 2.5, x0: 0, x1: t }); });
+            cvR.dot(t, yP, 6, { color: C.yellow, stroke: '#000' });
+            // T ブラケット: 直近の山2つ（t/T − xP/λ = 1/4 + k）
+            const tk = k => S.T * (0.25 + k + st.xP / S.L); const kNow = Math.floor((t / S.T - st.xP / S.L) - 0.25); if (tk(kNow) >= x0 && tk(kNow - 1) >= 0) cvR.hbracket(tk(kNow - 1), tk(kNow), S.A + 0.2, 'T = ' + fmt(S.T) + ' s', { color: C.yellow });
+            /* 読み出し */
+            sw.set(fmt(t - st.swT0) + ' s');
+            const n = Math.max(0, Math.floor((t / S.T - st.xP / S.L) - 0.25) - Math.floor((st.cntT0 / S.T - st.xP / S.L) - 0.25)); const el2 = t - st.cntT0;
+            cnt.set(n + ' 個 / ' + fmt(el2, 1) + ' s' + (el2 > 0.5 ? '　→ f ≈ ' + fmt(n / el2) + ' Hz' : ''));
+            const f = 1 / S.T, v = S.L / S.T;
+            fo.set(`f = 1/T = 1/${fmt(S.T)} = <b>${fmt(f)} Hz</b>　　v = fλ = ${fmt(f)} × ${fmt(S.L)} = <b>${fmt(v)} m/s</b>　　v = λ/T = ${fmt(S.L)}/${fmt(S.T)} = <b>${fmt(v)} m/s</b>`);
+          }
+        };
+      }
+    }
+  ]
+});
+})();
+</script>
+</body>
+</html>
