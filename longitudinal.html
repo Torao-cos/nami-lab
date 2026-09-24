@@ -26,6 +26,20 @@
     .stage.earth:not(.cols2) .panel{width:100%;height:100%;aspect-ratio:auto}
     .stage.rows4 .panel canvas{min-height:74px}
   }
+  /* 投影モード（白地・文字118%・線と文字1.6倍）の局所補正。dark 表示には一切かけない。
+     文字が大きくなるぶん、4段のタブ8では枠まわりを削って描画面の高さを確保する。 */
+  html[data-mode=proj] .view{padding:.4rem;gap:.4rem}
+  /* 見出しが1行に収まる幅のときだけ枠を詰める（狭い画面では見出しが2〜3行になり、
+     注記の位置を上げると見出しに重なるので、共通の既定のままにする） */
+  @media (min-width:761px){
+    html[data-mode=proj] .stage.rows4{grid-template-rows:1.2fr 0.95fr 1.1fr 1.05fr}
+    html[data-mode=proj] .stage.rows4 .panelTitle{padding:.12rem .5rem;font-size:.92rem;line-height:1.25}
+    html[data-mode=proj] .stage.rows4 .panel canvas{min-height:78px}
+    html[data-mode=proj] .panel .overlayTL{font-size:.72rem;top:1.65rem}
+    html[data-mode=proj] .stage.rows4 .panel .overlay{font-size:.95rem}
+    /* 地球の図：左上の注記は中央上の「震源」の点に重ねたくないので、左半分で折り返させる */
+    html[data-mode=proj] .stage.earth .panel .overlayTL{font-size:.74rem;max-width:40%;line-height:1.3}
+  }
 </style>
 </head><body>
 <script src="common.js"></script>
@@ -33,7 +47,28 @@
 (() => {
 'use strict';
 const { C, TAU, ui, Wave, fmt, clamp, hexA, mathHTML } = Nami;
-const SPARSE = '#cfd8ff'; // 疎のラベル色（腹の水色と区別）
+const PROJ = Nami.PROJ, SC = Nami.SC;
+// 疎のラベル色（密＝紫と対にする）。投影モードは白地なので、うすい水色では消える → 濃い青緑にする
+const SPARSE = PROJ ? '#00695c' : '#cfd8ff';
+const EDGE   = PROJ ? '#0d3b1e' : '#04140b';   // 玉のふちの色
+const ga = a => PROJ ? Math.min(1, a * 1.9) : a;   // 白地では薄い線が飛ぶので、投影モードだけ濃くする
+// 水平ブラケットのラベル。common.js は線から 12px しか離さないので、投影モードの大きい文字だと
+// 線の上に乗ってしまう。上側に出すラベルだけ、ここで少し離して描き直す。
+// 描くのは cv.clip() の外（＝上の余白にはみ出してよい）ので、いったんためてから flushBrackets() で出す。
+const _brLabels = [];
+function bracketH(cv, x1, x2, y, label, o) {
+  o = o || {};
+  cv.hbracket(x1, x2, y, PROJ ? null : label, o);
+  if (!PROJ) return;
+  // 上に出すラベルは線から十分はなす。下に出すラベル（変位）は x軸の目もりとぶつかるので、線の右へ逃がす。
+  _brLabels.push(o.below
+    ? { cv, label, X: cv.px(x2) + 10, Y: cv.py(y), o, align: 'left' }
+    : { cv, label, X: (cv.px(x1) + cv.px(x2)) / 2, Y: cv.py(y) - 18, o, align: 'center' });
+}
+function flushBrackets() {
+  for (const b of _brLabels) b.cv.textPx(b.label, b.X, b.Y, { color: b.o.color || C.yellow, bold: true, size: b.o.size || 14, align: b.align });
+  _brLabels.length = 0;
+}
 
 /* ===================================================================
  *  共有パラメータ（タブ6と8で共通。タブ切替時に onShow で再同期）
@@ -58,6 +93,10 @@ const denseX = t => combX(t, 0);      // 密
 const rareX  = t => combX(t, 0.5);    // 疎
 
 function ballXs(N) { const a = []; for (let i = 0; i < N; i++) a.push(X0 + (X1 - X0) * i / (N - 1)); return a; }
+
+// 密と疎は λ/2 ごとに交互に並ぶ。そのすきまに n 文字（1文字 size px）の添え書きが収まるか。
+// 投影モードは文字が 1.6 倍で重なりやすいのでここで間引く（dark は従来どおり必ず出す）。
+const fits = (cv, n, size) => !PROJ || Math.abs(cv.px(S.lambda) - cv.px(0)) / 2 > n * size * SC * 1.05;
 
 // 密・疎の位置をはさむ「両どなり」の玉の番号。
 // 密ではこの2つの玉が向かい合う向きにずれている（＝両側から寄ってくるから混みあう）、疎では逆に離れていく。
@@ -162,17 +201,17 @@ function buildLT(ctx) {
       if (showEq) for (const x of xs) cv.dot(x, 0, 1.5, { color: C.muted, alpha: 0.5 });
       if (showTrail) { cv.line(xs[ci], -A, xs[ci], A, { color: C.yellow, width: 1.2, alpha: 0.35, dash: [3, 3] }); cv.dot(xs[ci], 0, 2.5, { color: C.yellow, alpha: 0.6 }); }
       if (showVel) { const k = A * 0.85 / (A * TAU / S.T); for (const x of xs) cv.arrow(x, y(x), x, y(x) + vxi(x, t) * k, { color: C.vel, width: 1.6, head: 6, alpha: 0.9 }); }
-      xs.forEach((x, i) => cv.dot(x, y(x), i === ci ? 6.5 : 4.5, { color: i === ci ? C.yellow : C.wave, stroke: '#04140b', width: 1 }));
+      xs.forEach((x, i) => cv.dot(x, y(x), i === ci ? 6.5 : 4.5, { color: i === ci ? C.yellow : C.wave, stroke: EDGE, width: 1 }));
       // 変位ブラケット
       const xc = xs[ci];
       cv.vbracket(xc, 0, y(xc), '変位', { color: C.yellow, size: 12 });
       // λ ブラケット（山→山）。起点の山は kT が決める＝●をドラッグで別の山へ移せる
       if (showLam) {
         const p = lamAt(t, 0.25, kT); kT = p.k;
-        cv.hbracket(p.x, p.x + S.lambda, LAM_YT(), 'λ（山→山）', { color: C.yellow });
+        bracketH(cv, p.x, p.x + S.lambda, LAM_YT(), 'λ（山→山）', { color: C.yellow });
       }
     });
-    cv.drawHandles();
+    flushBrackets(); cv.drawHandles();
     cv.overlayTL.textContent = '媒質のふるえる向き ↕　波の進む向き →';
   }
 
@@ -185,8 +224,8 @@ function buildLT(ctx) {
     const xs = ballXs(N), ci = Math.round((N - 1) / 2), mk = flankMarks(xs, t, showLabels);
     cv.clip(() => {
       if (showLabels) {
-        for (const x of denseX(t)) cv.line(x, 0.05, x, 1.0, { color: C.dens, width: 1.4, alpha: 0.5, dash: [4, 4] });
-        for (const x of rareX(t))  cv.line(x, 0.05, x, 1.0, { color: SPARSE, width: 1.2, alpha: 0.35, dash: [2, 5] });
+        for (const x of denseX(t)) cv.line(x, 0.05, x, 1.0, { color: C.dens, width: 1.4, alpha: ga(0.5), dash: [4, 4] });
+        for (const x of rareX(t))  cv.line(x, 0.05, x, 1.0, { color: SPARSE, width: 1.2, alpha: ga(0.35), dash: [2, 5] });
       }
       if (showEq) for (const x of xs) cv.dot(x, BY - 0.28, 1.5, { color: C.muted, alpha: 0.55 });
       if (showTrail) { cv.line(xs[ci] - A, BY, xs[ci] + A, BY, { color: C.yellow, width: 1.2, alpha: 0.35, dash: [3, 3] }); cv.dot(xs[ci], BY - 0.28, 3, { color: C.yellow, alpha: 0.7 }); }
@@ -198,22 +237,24 @@ function buildLT(ctx) {
       }
       xs.forEach((x, i) => { const m = mk.get(i);
         cv.dot(x + xi(x, t), BY, (i === ci || m) ? 6.5 : 4.5,
-          { color: i === ci ? C.yellow : C.wave, stroke: m ? (m === 'd' ? C.dens : SPARSE) : '#04140b', width: m ? 2 : 1 }); });
+          { color: i === ci ? C.yellow : C.wave, stroke: m ? (m === 'd' ? C.dens : SPARSE) : EDGE, width: m ? 2 : 1 }); });
       const xc = xs[ci], d0 = Math.min(xc, xc + xi(xc, t)), d1 = Math.max(xc, xc + xi(xc, t));
-      cv.hbracket(d0, d1, BY - 0.28, '変位', { color: C.yellow, below: true, size: 12 });
+      bracketH(cv, d0, d1, BY - 0.28, '変位', { color: C.yellow, below: true, size: 12 });
       if (showLabels) {
+        // 添え書き（9文字）は密・疎が λ/2 ごとに並ぶので、投影の大きい文字では入りきらないことがある → 入らなければ省く
+        const sub = fits(cv, 9, 10);
         for (const x of denseX(t)) { cv.text('密', x, BY + 0.5, { color: C.dens, bold: true, size: 15 });
-          cv.text('両側から寄ってくる', x, BY + 0.34, { color: C.dens, size: 10 }); }
+          if (sub) cv.text('両側から寄ってくる', x, BY + 0.34, { color: C.dens, size: 10 }); }
         for (const x of rareX(t))  { cv.text('疎', x, BY + 0.5, { color: SPARSE, bold: true, size: 15 });
-          cv.text('両側へ離れていく', x, BY + 0.34, { color: SPARSE, size: 10 }); }
+          if (sub) cv.text('両側へ離れていく', x, BY + 0.34, { color: SPARSE, size: 10 }); }
       }
       // λ ブラケット（密→密）。起点の密は kL が決める＝●をドラッグで別の密へ移せる
       if (showLam) {
         const p = lamAt(t, 0, kL); kL = p.k;
-        cv.hbracket(p.x, p.x + S.lambda, LAM_YL(), 'λ（密→密）', { color: C.yellow });
+        bracketH(cv, p.x, p.x + S.lambda, LAM_YL(), 'λ（密→密）', { color: C.yellow });
       }
     });
-    cv.drawHandles();
+    flushBrackets(); cv.drawHandles();
     cv.overlayTL.textContent = '媒質のふるえる向き ↔　波の進む向き →' + (showVel ? '（橙の矢印は玉の速度）' : '');
   }
 
@@ -624,7 +665,7 @@ function buildSeismic(ctx) {
 
   /* --- ドラッグできる点 --- */
   cv.addHandle({
-    color: '#dfe9e3', size: 8, label: '震源',
+    color: PROJ ? '#111111' : '#dfe9e3', size: 8, label: '震源',
     get: () => ({ x: 0, y: ER - depth }),
     set: (x, y) => { depth = clamp(ER - Math.hypot(x, y), 0, 700); sD.set(depth, true); rebuildRays(); },
     onEnd: () => rebuildAnalysis()
@@ -638,10 +679,16 @@ function buildSeismic(ctx) {
   /* --- 地震計の小窓（キャンバス内・どこをつかんでも動かせる） --- */
   let boxF = null, boxDrag = null;
   const boxCompact = () => cv.w < 520;              // スマホ幅では時間の目もりだけの細い帯にする（数値は下の操作パネルにある）
+  const BS = PROJ ? 1.3 : 1;                        // 小窓の文字は px 直書き＝SC が効かないので、ここで投影ぶんを掛ける
   function boxRect() {
     const cp = boxCompact();
-    const W = cp ? Math.min(cv.w - 12, 244) : Math.round(clamp(cv.w * 0.34, 188, 268)), H = cp ? 76 : 166;
-    if (!boxF) boxF = cp ? { x: 0, y: 1 } : { x: 0.99, y: 0.03 };   // 既定位置（あとはドラッグで自由に動かせる）
+    // 投影モードは中の文字を BS 倍にするが、横幅は広げない（中央上の「震源」のラベルを隠さない幅に収める）。
+    // そのぶん文言を短くし、いちばん長い「初期微動継続時間 S−P」は2行に分ける。
+    const W = cp ? Math.min(cv.w - 12, Math.round(244 * BS)) : Math.round(PROJ ? clamp(cv.w * 0.40, 204, 244) : clamp(cv.w * 0.34, 188, 268)),
+          H = Math.round((cp ? 76 : 166) * BS);
+    // 既定位置（あとはドラッグで自由に動かせる）。投影モードは小窓が一回り大きいので、
+    // そのままだと中央上の「震源」のラベルを隠す → 少し下げる（図は左右対称なので右側が隠れても読める）。
+    if (!boxF) boxF = cp ? { x: 0, y: 1 } : { x: 0.99, y: 0.03 };
     const fx = Math.max(0, cv.w - W - 8), fy = Math.max(0, cv.h - H - 8);
     return { x: 4 + boxF.x * fx, y: 4 + boxF.y * fy, w: W, h: H, compact: cp };
   }
@@ -661,17 +708,23 @@ function buildSeismic(ctx) {
   });
 
   /* --- 地球断面の描画 --- */
-  const LAY = [
+  // 投影モードは白地なので、層は「うすい色の面＋濃いふち」にする（暗い茶色のままだと黒い塊に見える）
+  const LAY = PROJ ? [
+    { r: ER, fill: '#fae3c6', stroke: '#a3662a', label: 'マントル（固体）', lr: 5000, lt: 236 },
+    { r: R_CMB, fill: '#fdf3c4', stroke: '#9a7500', label: '外核（液体）＝S波は通れない', lr: 2600, lt: 242 },
+    { r: R_ICB, fill: '#dcdcdc', stroke: '#555555', label: '内核（固体）', lr: 640, lt: 236 }
+  ] : [
     { r: ER, fill: '#3b2d22', stroke: '#7a5f47', label: 'マントル（固体）', lr: 5000, lt: 236 },
     { r: R_CMB, fill: '#5d3410', stroke: '#c2701f', label: '外核（液体）＝S波は通れない', lr: 2600, lt: 242 },
     { r: R_ICB, fill: '#c8912f', stroke: '#ffd166', label: '内核（固体）', lr: 640, lt: 236 }
   ];
+  const LAYLAB = PROJ ? '#4a2600' : '#ffe6c4';   // 層ラベルの文字色
   // 右半分を描いてから、同じ手続きを左右反転してもう一度描く（文字は反転してしまうので外で描く）
   function mirrored(fn) { const g = cv.ctx, X0 = cv.px(0); g.save(); g.translate(2 * X0, 0); g.scale(-1, 1); fn(); g.restore(); }
 
   function drawRaySet(list, color, te) {
     for (const r of list) {
-      cv.plotPts(r.path, { color, width: r.inner ? 1.0 : 1.3, alpha: 0.20 });        // 道すじ全体（うすく）
+      cv.plotPts(r.path, { color, width: r.inner ? 1.0 : 1.3, alpha: PROJ ? 0.34 : 0.20 });  // 道すじ全体（うすく）
       const passed = passedPart(r.path, te);
       if (passed.length > 1) cv.plotPts(passed, { color, width: r.inner ? 1.2 : 1.8, alpha: 0.88 });  // もう通った所（濃く）
     }
@@ -696,7 +749,7 @@ function buildSeismic(ctx) {
     cv.clear();
     const need = ER * 1.215, aspect = cv.iw / Math.max(1, cv.ih);
     cv.setViewIso(0, 0, need * Math.max(1, aspect));   // 横幅基準の setViewIso を「縦にも切れない」ようにして使う
-    for (const L of LAY) cv.circle(0, 0, L.r, { fill: L.fill, color: L.stroke, width: 1.5 });
+    for (const L of LAY) cv.circle(0, 0, L.r, { fill: L.fill, color: L.stroke, width: PROJ ? 2.2 : 1.5 });
     // 角距離の目盛り（影ラベルと重なる角度は数値を省く）
     const pMid = BND ? (BND.pStart + BND.pEnd) / 2 : -99, sMid = BND ? (BND.sStart + 178) / 2 : -99;
     for (let d = 0; d <= 180; d += 30) {
@@ -706,7 +759,7 @@ function buildSeismic(ctx) {
         if (d === 0 && sg < 0) continue; if (d === 180 && sg < 0) continue;
         const th = sg * d / DEG, sx = Math.sin(th), cy = Math.cos(th);
         cv.line(ER * 0.965 * sx, ER * 0.965 * cy, ER * sx, ER * cy, { color: C.guide, width: 1, alpha: .55 });
-        if (!hide) cv.text(d + '°', ER * 1.118 * sx, ER * 1.118 * cy, { color: C.muted, size: 11, bg: 'rgba(2,5,3,0.6)' });
+        if (!hide) cv.text(d + '°', ER * 1.118 * sx, ER * 1.118 * cy, { color: C.muted, size: 11, bg: PROJ ? C.textBg : 'rgba(2,5,3,0.6)' });
       }
     }
     // シャドーゾーン（P と S は別々に出し入れできる）
@@ -718,10 +771,15 @@ function buildSeismic(ctx) {
         return p;
       };
       // 帯は地表のすぐ外側に並べて描く（地球の内部を通る波面や波線と重ならない）
-      const PB = [ER * 1.004, ER * 1.050], SB = [ER * 1.056, ER * 1.102];
+      // 投影モードは帯を太く・濃くする（白地では薄い帯が飛ぶ）。外側の半径は動かさない
+      // ＝角距離の数字（1.118・1.178）と重ねないため。内側へ広げて太くする。
+      const PB = PROJ ? [ER * 0.994, ER * 1.050] : [ER * 1.004, ER * 1.050];
+      const SB = PROJ ? [ER * 1.054, ER * 1.108] : [ER * 1.056, ER * 1.102];
+      const bandOpt = col => PROJ ? { color: col, width: 1.2, fill: hexA(col, 0.55), close: true }
+                                  : { color: 'none', fill: hexA(col, col === C.wave1 ? 0.45 : 0.38), close: true };
       for (const sg of [1, -1]) {
-        if (showSShadow) cv.plotPts(band(BND.sStart, 180, sg, SB[0], SB[1]), { color: 'none', fill: hexA(C.wave2, 0.38), close: true });
-        if (showPShadow) cv.plotPts(band(BND.pStart, BND.pEnd, sg, PB[0], PB[1]), { color: 'none', fill: hexA(C.wave1, 0.45), close: true });
+        if (showSShadow) cv.plotPts(band(BND.sStart, 180, sg, SB[0], SB[1]), bandOpt(C.wave2));
+        if (showPShadow) cv.plotPts(band(BND.pStart, BND.pEnd, sg, PB[0], PB[1]), bandOpt(C.wave1));
       }
       // 数字は P と S で半径をずらす（98° と 103° が近くても重ならない）
       const edge = (d, col, rr, rLab) => {
@@ -757,14 +815,15 @@ function buildSeismic(ctx) {
       }
       if (stop) {   // ラベルは左側に置く（右上は地震計の小窓の定位置なので重ねない）
         const L = Math.hypot(stop[0], stop[1]) || 1, f = (R_CMB + 620) / L;
-        cv.text('×＝S波はここで止まる', -stop[0] * f, stop[1] * f, { color: C.wave2, size: 11, bold: true, bg: 'rgba(2,5,3,0.92)' });
+        cv.text('×＝S波はここで止まる', -stop[0] * f, stop[1] * f, { color: C.wave2, size: 11, bold: true, bg: PROJ ? 'rgba(255,255,255,0.93)' : 'rgba(2,5,3,0.92)' });
       }
     }
     // 層ラベル
-    for (const L of LAY) { const th = L.lt / DEG; cv.text(L.label, L.lr * Math.sin(th), L.lr * Math.cos(th), { color: '#ffe6c4', bold: true, size: 12 }); }
+    for (const L of LAY) { const th = L.lt / DEG; cv.text(L.label, L.lr * Math.sin(th), L.lr * Math.cos(th), { color: LAYLAB, bold: true, size: 12 }); }
     cv.drawHandles();
     drawBox(te);
     cv.overlay.textContent = frontJob ? '波面を計算中…' : '再生速度 ×' + SEIS.scale;
+    // 投影モードでは CSS で幅を左 40% に制限して折り返す＝中央上の「震源」のラベルに重ねない
     cv.overlayTL.textContent = '模式図（層の厚さは実際の比率）　外核＝深さ2891 km〜　内核＝深さ5150 km〜';
   }
 
@@ -776,34 +835,42 @@ function buildSeismic(ctx) {
     readObs.set(`Δ = ${fmt(dObs, 1)}°　P到達 ${tp == null ? '— ' : fmt(tp, 0) + ' s' + pTag}　S到達 ${ts == null ? '—（Sのシャドーゾーン）' : fmt(ts, 0) + ' s'}`);
     readPS.set(tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '測定できない');
     const g = cv.ctx, r = boxRect(), TMAX = Math.max(1200, SEIS.tEnd);
+    const F = (px, bold) => (bold ? 'bold ' : '') + Math.round(px * BS) + 'px system-ui,sans-serif';
+    const PX = v => v * BS;                            // 小窓内の px 寸法（投影では一回り大きく）
     g.save();
-    g.fillStyle = 'rgba(2,10,6,0.88)'; g.strokeStyle = boxDrag ? C.yellow : C.line; g.lineWidth = boxDrag ? 2 : 1;
+    // 投影モードは白地なので、小窓も白地＋濃いふちにする（黒い四角にしない）
+    g.fillStyle = PROJ ? 'rgba(255,255,255,0.94)' : 'rgba(2,10,6,0.88)';
+    g.strokeStyle = boxDrag ? C.yellow : (PROJ ? C.muted : C.line); g.lineWidth = boxDrag ? 2 * BS : 1 * BS;
     g.fillRect(r.x, r.y, r.w, r.h); g.strokeRect(r.x, r.y, r.w, r.h);
     g.textBaseline = 'alphabetic';
-    g.fillStyle = C.text; g.font = 'bold 12px system-ui,sans-serif'; g.textAlign = 'left';
-    g.fillText('観測点の地震計', r.x + 10, r.y + 18);
-    g.fillStyle = C.muted; g.font = '10px system-ui,sans-serif'; g.textAlign = 'right';
-    g.fillText('⣿ ドラッグで移動', r.x + r.w - 8, r.y + 18);
-    const axY = r.y + (r.compact ? 52 : 58), x0 = r.x + 10, x1 = r.x + r.w - 10, xOf = ss => x0 + (x1 - x0) * clamp(ss / TMAX, 0, 1);
-    g.strokeStyle = C.axis; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, axY); g.lineTo(x1, axY); g.stroke();
-    if (tp != null && ts != null) { g.fillStyle = hexA(C.yellow, 0.18); g.fillRect(xOf(tp), axY - 16, xOf(ts) - xOf(tp), 16); }
+    g.fillStyle = C.text; g.font = F(12, true); g.textAlign = 'left';
+    g.fillText('観測点の地震計', r.x + PX(10), r.y + PX(18));
+    g.fillStyle = C.muted; g.font = F(10); g.textAlign = 'right';
+    g.fillText(PROJ ? '⣿ 移動' : '⣿ ドラッグで移動', r.x + r.w - PX(8), r.y + PX(18));
+    const axY = r.y + PX(r.compact ? 52 : 58), x0 = r.x + PX(10), x1 = r.x + r.w - PX(10), xOf = ss => x0 + (x1 - x0) * clamp(ss / TMAX, 0, 1);
+    g.strokeStyle = C.axis; g.lineWidth = 1 * BS; g.beginPath(); g.moveTo(x0, axY); g.lineTo(x1, axY); g.stroke();
+    if (tp != null && ts != null) { g.fillStyle = hexA(C.yellow, PROJ ? 0.28 : 0.18); g.fillRect(xOf(tp), axY - PX(16), xOf(ts) - xOf(tp), PX(16)); }
     const mark = (ss, col, lab) => {
       if (ss == null) return; const X = xOf(ss);
-      g.strokeStyle = col; g.lineWidth = 2.5; g.beginPath(); g.moveTo(X, axY); g.lineTo(X, axY - 22); g.stroke();
-      g.fillStyle = col; g.font = 'bold 12px system-ui,sans-serif'; g.textAlign = 'center'; g.fillText(lab, X, axY - 26);
+      g.strokeStyle = col; g.lineWidth = 2.5 * BS; g.beginPath(); g.moveTo(X, axY); g.lineTo(X, axY - PX(22)); g.stroke();
+      g.fillStyle = col; g.font = F(12, true); g.textAlign = 'center'; g.fillText(lab, X, axY - PX(26));
     };
     mark(tp, C.wave1, 'P'); mark(ts, C.wave2, 'S');
-    const Xc = xOf(te); g.strokeStyle = C.yellow; g.lineWidth = 1.5; g.beginPath(); g.moveTo(Xc, axY + 5); g.lineTo(Xc, axY - 30); g.stroke();
-    g.fillStyle = C.muted; g.font = '10px system-ui,sans-serif'; g.textAlign = 'left'; g.fillText('0', x0, axY + 12);
-    g.textAlign = 'right'; g.fillText(fmt(TMAX, 0) + ' s', x1, axY + 12);
+    const Xc = xOf(te); g.strokeStyle = C.yellow; g.lineWidth = 1.5 * BS; g.beginPath(); g.moveTo(Xc, axY + PX(5)); g.lineTo(Xc, axY - PX(30)); g.stroke();
+    g.fillStyle = C.muted; g.font = F(10); g.textAlign = 'left'; g.fillText('0', x0, axY + PX(12));
+    g.textAlign = 'right'; g.fillText(fmt(TMAX, 0) + ' s', x1, axY + PX(12));
     if (r.compact) { g.restore(); return; }          // 細い帯のときは数値を下の操作パネルにまかせる
-    g.textAlign = 'left'; g.font = '12px system-ui,sans-serif';
-    const li = (txt, col, k) => { g.fillStyle = col; g.fillText(txt, r.x + 10, r.y + 86 + k * 17); };
+    g.textAlign = 'left'; g.font = F(12);
+    const li = (txt, col, k) => { g.fillStyle = col; g.fillText(txt, r.x + PX(10), r.y + PX(86 + k * 17)); };
     li('角距離 Δ = ' + fmt(dObs, 1) + '°', C.yellow, 0);
     li('P 到達 ' + (tp == null ? '—' : fmt(tp, 0) + ' s' + pTag), C.wave1, 1);
-    li('S 到達 ' + (ts == null ? '— （Sのシャドーゾーン）' : fmt(ts, 0) + ' s'), C.wave2, 2);
-    g.fillStyle = C.text; g.font = 'bold 12px system-ui,sans-serif';
-    g.fillText('初期微動継続時間 S−P = ' + (tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '—'), r.x + 10, r.y + 86 + 3 * 17);
+    li('S 到達 ' + (ts == null ? (PROJ ? '—（Sの影の中）' : '— （Sのシャドーゾーン）') : fmt(ts, 0) + ' s'), C.wave2, 2);
+    const sp = tp != null && ts != null ? fmt(ts - tp, 0) + ' s' : '—';
+    g.fillStyle = C.text; g.font = F(12, true);
+    if (PROJ) {   // 横幅を広げない代わりに2行に分ける
+      g.fillText('初期微動継続時間', r.x + PX(10), r.y + PX(86 + 3 * 17));
+      g.fillText('S−P = ' + sp, r.x + PX(10), r.y + PX(86 + 4 * 17));
+    } else g.fillText('初期微動継続時間 S−P = ' + sp, r.x + PX(10), r.y + PX(86 + 3 * 17));
     g.restore();
   }
 
@@ -844,6 +911,14 @@ function buildLTG(ctx) {
   const c2 = ctx.canvas({ title: '② 各点の変位を矢印で（右向きを正）' });
   const c3 = ctx.canvas({ title: '③ 矢印を90°回すと「横波表示」になる（矢印の長さ＝変位の大きさ。回しても長さは変わらない）' });
   const c4 = ctx.canvas({ title: '④ 疎密（圧力）のグラフ　Δρ ∝ −∂ξ/∂x' });
+  // 投影モードは文字も余白も 1.6 倍。4段のこのタブでは既定の余白（上下で 78px）だけで描画面が埋まって
+  // 図がつぶれるので、目盛りを出さない段の余白を削って中身の高さを取り戻す。
+  if (PROJ) {
+    c1.setPad({ t: 4, b: 20, l: 14, r: 12 });
+    c2.setPad({ t: 3, b: 4, l: 14, r: 12 });
+    c3.setPad({ t: 3, b: 4, l: 26, r: 12 });
+    c4.setPad({ t: 4, b: 6, l: 30, r: 12 });   // x軸は真ん中＝目盛りは内側に出るので下の余白はいらない
+  }
 
   const P = paramControls(ctx.controls, () => {});
   ui.sep(ctx.controls);
@@ -871,8 +946,8 @@ function buildLTG(ctx) {
 
   function guides(cv, t, y0, y1) {
     if (!showGuides) return;
-    for (const x of denseX(t)) cv.line(x, y0, x, y1, { color: C.dens, width: 1.3, alpha: .45, dash: [4, 4] });
-    for (const x of rareX(t))  cv.line(x, y0, x, y1, { color: SPARSE, width: 1.1, alpha: .3, dash: [2, 5] });
+    for (const x of denseX(t)) cv.line(x, y0, x, y1, { color: C.dens, width: 1.3, alpha: ga(.45), dash: [4, 4] });
+    for (const x of rareX(t))  cv.line(x, y0, x, y1, { color: SPARSE, width: 1.1, alpha: ga(.3), dash: [2, 5] });
   }
 
   const BY1 = 0.5;
@@ -887,7 +962,7 @@ function buildLTG(ctx) {
       if (showVel) { const k = 0.32 / (S.A * TAU / S.T) * Math.min(S.A, 0.3); for (const x of xs) { const p = x + xi(x, t); cv.arrow(p, BY1 + 0.22, p + vxi(x, t) * k, BY1 + 0.22, { color: C.vel, width: 1.5, head: 5, alpha: .85, zeroDot: true }); } }
       // 密・疎をはさむ2つの玉は大きく描く（②の太い矢印と同じ玉）
       xs.forEach((x, i) => { const m = mk.get(i);
-        cv.dot(x + xi(x, t), BY1, m ? 6.5 : 4.5, { color: C.wave, stroke: m ? (m === 'd' ? C.dens : SPARSE) : '#04140b', width: m ? 2 : 1 }); });
+        cv.dot(x + xi(x, t), BY1, m ? 6.5 : 4.5, { color: C.wave, stroke: m ? (m === 'd' ? C.dens : SPARSE) : EDGE, width: m ? 2 : 1 }); });
       if (showLabels) {
         for (const x of denseX(t)) cv.text('密', x, BY1 + 0.42, { color: C.dens, bold: true, size: 14 });
         for (const x of rareX(t))  cv.text('疎', x, BY1 + 0.42, { color: SPARSE, bold: true, size: 14 });
@@ -907,13 +982,14 @@ function buildLTG(ctx) {
         const d = sgn() * xi(x, t), m = mk.get(i);
         cv.arrow(x, 0, x + d, 0, { color: d >= 0 ? C.wave : C.wave1, width: m ? 3.6 : 2, head: m ? 9 : 7, zeroDot: true, alpha: m ? 1 : 0.75 });
       });
-      if (showLabels) {
+      if (showLabels && fits(cv, 3, 11)) {
         for (const x of denseX(t)) cv.text('寄る', x, yM * 0.5, { color: C.dens, bold: true, size: 11 });
         for (const x of rareX(t))  cv.text('離れる', x, -yM * 0.5, { color: SPARSE, bold: true, size: 11 });
       }
     });
+    // 投影モードは注記を短く（大きい文字だと図の上の「寄る」ラベルに重なる。長い説明は下の操作パネルにある）
     cv.overlayTL.textContent = (rev ? '変位の正の向き：左 ←' : '変位の正の向き：右 →')
-      + '　太い2本＝密・疎の位置をはさむ玉（密では向かい合い、疎では離れる）';
+      + (PROJ ? '' : '　太い2本＝密・疎の位置をはさむ玉（密では向かい合い、疎では離れる）');
   }
 
   function draw3(t) {
@@ -937,14 +1013,19 @@ function buildLTG(ctx) {
         for (const x of rareX(t))  cv.text('疎', x, cv.view.y1 * 0.86, { color: SPARSE, bold: true, size: 14 });
       }
     });
-    cv.overlayTL.textContent = '右向きの変位を上向きに、左向きの変位を下向きに写し替えているだけ（長さはそのまま・図を見やすくするための約束）';
+    // 投影モードでは出さない：90°回したあとの緑の曲線と「密・疎」のラベルがこの位置に来るため。
+    // 同じ文は下の操作パネルの注記（「回すのは手品ではない：…」）にそのまま書いてある。
+    cv.overlayTL.textContent = PROJ ? ''
+                                    : '右向きの変位を上向きに、左向きの変位を下向きに写し替えているだけ（長さはそのまま・図を見やすくするための約束）';
     cv.overlay.textContent = rot > 88 ? '回転 90°　緑の曲線＝矢印の先をつないだもの＝横波表示' : '回転 ' + fmt(rot, 0) + '°';
   }
 
   function draw4(t) {
     const cv = c4; cv.clear();
     cv.setView({ x0: VX0, x1: VX1, y0: -1.35, y1: 1.35 });
-    cv.axes({ xLabel: 'x [m]', yLabel: '圧力の変化', xStep: 1, yStep: 1, yTick: v => v > 0 ? '密' : (v < 0 ? '疎' : '0') });
+    // 投影モードは y軸ラベルを出さない：文字が大きく、左上の注記（overlayTL）と重なるため。
+    // 中身は縦軸の目盛り「密／疎」とパネルの見出しで読める。
+    cv.axes({ xLabel: 'x [m]', yLabel: PROJ ? null : '圧力の変化', xStep: 1, yStep: 1, yTick: v => v > 0 ? '密' : (v < 0 ? '疎' : '0') });
     cv.clip(() => {
       guides(cv, t, -1.3, 1.3);
       // Δρ ∝ −∂ξ/∂x を最大値1に規格化 → cos φ
