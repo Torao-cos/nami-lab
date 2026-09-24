@@ -12,6 +12,11 @@
   /* 作図ステップの「なぜそうなるか」 */
   .controls .note.reason{color:var(--text);opacity:.92;line-height:1.55;font-size:.88rem}
   .controls .note.reason b{font-weight:800}
+  /* 投影モード（白地・大きい文字）: 理由文は薄めず、図の高さを稼ぐ */
+  html[data-mode=proj] .controls .note.reason{opacity:1;font-size:.95rem}
+  html[data-mode=proj] .panel.mid{min-height:340px}
+  html[data-mode=proj] .panel.half{min-height:270px}
+  html[data-mode=proj] .panel.tall{min-height:600px}
   @media (max-width:760px){
     .panel.mid{min-height:240px}
     .panel.half{min-height:200px}
@@ -23,7 +28,11 @@
 <script>
 (() => {
 'use strict';
-const { C, TAU, ui, Wave, fmt, clamp } = Nami;
+const { C, TAU, ui, Wave, fmt, clamp, PROJ, SC } = Nami;
+/* 投影モードでは文字・線が SC 倍になるので、ページ側で px 指定している位置も同じだけ伸ばす */
+const S = v => v * SC;
+/* 半透明の補助線は白地だと沈むので、投影モードでは濃いめにする */
+const GA = a => PROJ ? Math.min(1, a * 1.55) : a;
 const dbg = (window.__nami_debug = window.__nami_debug || {});
 
 /* ===================== ページD 共通: 波形セレクタ ===================== */
@@ -156,19 +165,55 @@ function makeWaveCtl(ctx, parent, o) {
   };
 }
 
-/* 文字が枠に収まるフォントサイズを返す（狭い画面で注記がはみ出さないように） */
+/* 文字が枠に収まるフォントサイズを返す（狭い画面で注記がはみ出さないように）。
+   textPx は size を SC 倍して描くので、測るときも SC 倍で測る（戻り値は SC 倍前の size）。 */
 function fitSize(cv, str, maxW, size, min = 9) {
   const g = cv.ctx; let s = size;
-  while (s > min) { g.font = 'bold ' + s + 'px system-ui,sans-serif'; if (g.measureText(str).width + 10 <= maxW) break; s--; }
+  while (s > min) { g.font = 'bold ' + (s * SC) + 'px system-ui,sans-serif'; if (g.measureText(str).width + S(10) <= maxW) break; s -= 0.5; }
   return s;
 }
 
-/* 壁の右（仮想領域）を薄く塗る */
+/* 壁の右（仮想領域）を薄く塗る（投影＝白地なので薄いグレー、手元＝薄い緑） */
+const SHADE = PROJ ? 'rgba(0,0,0,0.08)' : 'rgba(154,197,173,0.09)';
 function shadeRight(cv, xw) {
   const g = cv.ctx; g.save();
-  g.fillStyle = 'rgba(154,197,173,0.09)';
+  g.fillStyle = SHADE;
   g.fillRect(cv.px(xw), cv.pad.t, Math.max(0, cv.px(cv.view.x1) - cv.px(xw)), cv.ih);
   g.restore();
+}
+
+/* 壁（実線）。投影モードは白地なので黒。手元モードは従来どおり明るい色 */
+const WALL = PROJ ? C.text : '#e8fff2';
+
+/* 「節」「腹」ラベルを x 昇順に置く。前に置いた文字と近すぎるものは間引く（投影モードは文字が大きく重なりやすい）。
+   marks: [[x, 'n'|'a'], …]（順不同）／ Y: 文字の中心（px） */
+function drawMarks(cv, marks, Y) {
+  const minPx = S(26);
+  const sorted = marks.slice().sort((p, q) => p[0] - q[0]);
+  // 隣どうしが文字幅より詰まるときは「節」と「腹」を上下2段に分ける（片方だけ消えるのを防ぐ）
+  let tight = false;
+  for (let i = 1; i < sorted.length; i++) if (cv.px(sorted[i][0]) - cv.px(sorted[i - 1][0]) < minPx) { tight = true; break; }
+  const last = { n: -1e9, a: -1e9 };
+  for (const [x, kind] of sorted) {
+    const X = cv.px(x);
+    if (X - (tight ? last[kind] : Math.max(last.n, last.a)) < minPx) continue;
+    last[kind] = X;
+    cv.textPx(kind === 'n' ? '節' : '腹', X, Y - (tight && kind === 'a' ? S(18) : 0),
+      { color: kind === 'n' ? C.node : C.anti, size: 13, bold: true });
+  }
+}
+
+/* ブラケット＋ラベル。共通側の hbracket はラベル位置が px 固定（12px）で、
+   投影モードの大きな文字だと線や目盛りに重なるので、投影時だけラベルを自前で置く。
+   place: 'above'(既定) / 'below' / 'right' / 'left' */
+function bracket(cv, x1, x2, y, label, o = {}) {
+  if (!PROJ) { cv.hbracket(x1, x2, y, label, o); return; }
+  cv.hbracket(x1, x2, y, null, o);
+  const X1 = cv.px(x1), X2 = cv.px(x2), Y = cv.py(y), col = o.color || C.yellow, size = o.size || 13;
+  const place = o.place || 'above';
+  if (place === 'right') cv.textPx(label, X2 + S(9), Y, { color: col, bold: true, size, align: 'left' });
+  else if (place === 'left') cv.textPx(label, X1 - S(9), Y, { color: col, bold: true, size, align: 'right' });
+  else cv.textPx(label, (X1 + X2) / 2, Y + (place === 'below' ? S(13) : -S(13)), { color: col, bold: true, size });
 }
 
 const periodHolder = {};
@@ -239,8 +284,8 @@ function buildSuperpose(ctx) {
       // 最大変位の読み
       let mx = 0, mxx = 0;
       for (let x = V.x0; x <= V.x1; x += 0.02) { const s = y1(x, t) + y2(x, t); if (Math.abs(s) > Math.abs(mx)) { mx = s; mxx = x; } }
-      cv.textPx('合成の最大変位 ' + fmt(mx, 2) + ' m（x = ' + fmt(mxx, 1) + ' m）', cv.pad.l + 6, cv.pad.t + 12, { align: 'left', color: C.wave, size: 13, bold: true });
-      if (w1.P.drawing || w2.P.drawing) cv.textPx('ドラッグで波形を描いてください', cv.pad.l + 6, cv.pad.t + 30, { align: 'left', color: C.yellow, size: 13, bold: true });
+      cv.textPx('合成の最大変位 ' + fmt(mx, 2) + ' m（x = ' + fmt(mxx, 1) + ' m）', cv.pad.l + S(6), cv.pad.t + S(12), { align: 'left', color: C.wave, size: 13, bold: true });
+      if (w1.P.drawing || w2.P.drawing) cv.textPx('ドラッグで波形を描いてください', cv.pad.l + S(6), cv.pad.t + S(30), { align: 'left', color: C.yellow, size: 13, bold: true });
     }
   };
 }
@@ -315,53 +360,60 @@ function buildReflect(ctx) {
       // ③ 合成波（下に敷く）
       if (step >= 3 && tS.get()) {
         cv.plot(x => ySum(end, x, t), { color: C.wave, width: 4.2, x0: V.x0, x1: L });
-        cv.plot(x => ySum(end, x, t), { color: C.wave, width: 2.0, alpha: 0.3, x0: L, x1: V.x1 });
+        cv.plot(x => ySum(end, x, t), { color: C.wave, width: 2.0, alpha: GA(0.3), x0: L, x1: V.x1 });
       }
       // ① 入射波
       if (tI.get()) {
         cv.plot(x => yi(x, t), { color: C.wave1, width: 2.6, dash: [7, 4], x0: V.x0, x1: L });
-        if (step >= 1) cv.plot(x => yi(x, t), { color: C.wave1, width: 2.0, dash: [7, 4], alpha: 0.35, x0: L, x1: V.x1 });
+        if (step >= 1) cv.plot(x => yi(x, t), { color: C.wave1, width: 2.0, dash: [7, 4], alpha: GA(0.35), x0: L, x1: V.x1 });
       }
       // ② 反射波
       if (step >= 2 && tR.get()) {
         cv.plot(x => s * yi(2 * L - x, t), { color: C.wave2, width: 2.6, dash: [7, 4], x0: V.x0, x1: L });
-        cv.plot(x => s * yi(x, t), { color: C.wave2, width: 2.0, dash: [3, 3], alpha: 0.35, x0: L, x1: V.x1 });
+        cv.plot(x => s * yi(x, t), { color: C.wave2, width: 2.0, dash: [3, 3], alpha: GA(0.35), x0: L, x1: V.x1 });
         // 折り返しの矢印（作図の意味が出るパルスのときだけ）
         let xp = null, best = inc.P.isPulse() ? 0 : Infinity;
         for (let x = L + 0.05; x <= V.x1; x += 0.05) { const v = Math.abs(s * yi(x, t)); if (v > best) { best = v; xp = x; } }
         if (xp != null && best > 0.08) {
           const yv = s * yi(xp, t);
           cv.arrow(xp, yv, 2 * L - xp, yv, { color: C.wave2, alpha: 0.85, width: 1.6, head: 9 });
-          cv.text('折り返す', L, yv + (yv >= 0 ? 0.34 : -0.34), { color: C.wave2, size: 12, bold: true });
+          // 投影モードは文字が大きいので、矢印に重ならないよう px でずらし、
+          // 壁の左下に出る y(L) の読みを避けて壁の右側へ寄せる（手元モードは従来どおり壁の真上／真下）
+          const lp = PROJ
+            ? { X: cv.px(L) + S(6), Y: cv.py(yv) + (yv >= 0 ? -S(14) : S(14)), align: 'left' }
+            : { X: cv.px(L), Y: cv.py(yv + (yv >= 0 ? 0.34 : -0.34)), align: 'center' };
+          cv.textPx('折り返す', lp.X, lp.Y, { align: lp.align, color: C.wave2, size: 12, bold: true });
         }
       }
     });
     // 壁
-    cv.line(L, V.y0, L, V.y1, { color: '#e8fff2', width: 3 });
+    cv.line(L, V.y0, L, V.y1, { color: WALL, width: 3 });
     const yw = ySum(end, L, t);
     if (end === 'free') {
-      // 縦の棒を滑る輪（自由端）
-      cv.dotPx(cv.px(L), cv.py(yw), 8, { color: '#0b1510', stroke: C.yellow, width: 3 });
+      // 縦の棒を滑る輪（自由端）。輪の内側は背景色で抜く
+      cv.dotPx(cv.px(L), cv.py(yw), 8, { color: PROJ ? '#ffffff' : '#0b1510', stroke: C.yellow, width: S(3) });
     } else {
-      const g = cv.ctx; g.save(); g.strokeStyle = C.muted; g.lineWidth = 1.5;
-      for (let k = 0; k < 9; k++) { const Y = cv.pad.t + cv.ih * k / 8; g.beginPath(); g.moveTo(cv.px(L), Y); g.lineTo(cv.px(L) + 12, Y + 10); g.stroke(); }
+      const g = cv.ctx; g.save(); g.strokeStyle = C.muted; g.lineWidth = 1.5 * SC;
+      for (let k = 0; k < 9; k++) { const Y = cv.pad.t + cv.ih * k / 8; g.beginPath(); g.moveTo(cv.px(L), Y); g.lineTo(cv.px(L) + S(12), Y + S(10)); g.stroke(); }
       g.restore();
-      cv.dot(L, 0, 6, { color: C.node, stroke: '#000' });
+      cv.dot(L, 0, 6, { color: C.node, stroke: PROJ ? '#ffffff' : '#000' });
     }
-    cv.textPx('仮想の領域', (cv.px(L) + cv.px(V.x1)) / 2, cv.pad.t + 12, { color: C.muted, size: 12, bg: false });
-    cv.textPx(end === 'free' ? '自由端：壁の位置は腹（変位の最大は 2A）' : '固定端：壁の位置は常に変位 0（節）',
-      cv.pad.l + 6, cv.pad.t + 12, { align: 'left', color: end === 'free' ? C.anti : C.node, size: 13, bold: true });
-    cv.textPx('y(L) = ' + fmt(yw, 2) + ' m', cv.px(L) - 8, cv.pad.t + cv.ih - 10, { align: 'right', color: C.wave, size: 13, bold: true });
-    // 作図ステップ②以降は「なぜその折り返しになるのか」を絵の上にも置く
+    if (cv.px(V.x1) - cv.px(L) > S(90)) cv.textPx('仮想の領域', (cv.px(L) + cv.px(V.x1)) / 2, cv.pad.t + S(12), { color: C.muted, size: 12, bg: false });
+    const head = end === 'free'
+      ? (PROJ ? '自由端：壁は腹（最大 2A）' : '自由端：壁の位置は腹（変位の最大は 2A）')
+      : (PROJ ? '固定端：壁は節（変位 0）' : '固定端：壁の位置は常に変位 0（節）');
+    cv.textPx(head, cv.pad.l + S(6), cv.pad.t + S(12), { align: 'left', color: end === 'free' ? C.anti : C.node, size: fitSize(cv, head, cv.px(L) - cv.pad.l, 13), bold: true });
+    cv.textPx('y(L) = ' + fmt(yw, 2) + ' m', cv.px(L) - S(8), cv.pad.t + cv.ih - S(10), { align: 'right', color: C.wave, size: 13, bold: true });
+    // 作図ステップ②以降は「なぜその折り返しになるのか」を絵の上にも置く（投影では短く・1行下げる）
     if (step >= 2) {
-      const wide = cv.iw > 460;
+      const wide = cv.iw > (PROJ ? 900 : 460);   // 投影は文字が大きいぶん、長い文を出すのは十分広いときだけ
       const why = end === 'free'
         ? (wide ? '端が自由に動ける（引き戻す力がない）→ 線対称に折り返す → 壁で同じ変位が重なり傾き0（最大 2A）'
                 : '端が自由 → 線対称に折り返す → 壁で最大 2A')
         : (wide ? '端が動けない（変位が常に0）→ 上下反転して折り返す → 壁で打ち消し合って常に0'
                 : '端は動けない → 上下反転して折り返す → 壁で0');
-      cv.textPx(why, cv.pad.l + 6, cv.pad.t + 30,
-        { align: 'left', color: end === 'free' ? C.anti : C.node, size: fitSize(cv, why, cv.iw - 12, 12), bold: true });
+      cv.textPx(why, cv.pad.l + S(6), cv.pad.t + S(30),
+        { align: 'left', color: end === 'free' ? C.anti : C.node, size: fitSize(cv, why, cv.iw - S(12), 12), bold: true });
     }
     inc.P.drawLive(cv);
     return yw;
@@ -458,10 +510,10 @@ function buildStanding(ctx) {
     cv.clear(); cv.setView(V);
     cv.axes({ xLabel: 'x [m]', yLabel: 'y [m]', xStep: 1, yStep: 1 });
     const lam = lamOf(v1.get(), f1.get()), A = a1.get(), ok = matched();
-    const ghost = ok ? 1 : 0.35;   // 不一致でも「波1の条件で計算した節・腹の位置」を薄く残す
+    const ghost = ok ? 1 : GA(0.35);   // 不一致でも「波1の条件で計算した節・腹の位置」を薄く残す
     cv.clip(() => {
       if (tE.get()) {
-        const ea = ok ? .75 : .26;
+        const ea = ok ? GA(.75) : GA(.26);
         cv.plot(x => 2 * A * Math.cos(TAU * x / lam), { color: C.guide, width: 1.6, dash: [5, 5], alpha: ea });
         cv.plot(x => -2 * A * Math.cos(TAU * x / lam), { color: C.guide, width: 1.6, dash: [5, 5], alpha: ea });
       }
@@ -470,9 +522,11 @@ function buildStanding(ctx) {
       if (t2.get()) cv.plot(x => Y2(x, t), { color: C.wave2, width: 2.0, dash: [7, 4] });
       if (tM.get()) {
         const g = cv.ctx; g.save(); g.globalAlpha = ghost;
-        const xEnd = V.x1 - 0.45;   // 右端の x 軸ラベルに重ねない
-        for (let x = lam / 4; x <= xEnd; x += lam / 2) cv.text('節', x, 0, { color: C.node, size: 13, bold: true, dy: -11 });
-        for (let x = 0; x <= xEnd; x += lam / 2) cv.text('腹', x, 0, { color: C.anti, size: 13, bold: true, dy: -11 });
+        const xEnd = V.x1 - (PROJ ? 0.8 : 0.45);   // 右端の x 軸ラベルに重ねない（投影は文字が大きい）
+        const marks = [];
+        for (let x = lam / 4; x <= xEnd; x += lam / 2) marks.push([x, 'n']);
+        for (let x = 0; x <= xEnd; x += lam / 2) marks.push([x, 'a']);
+        drawMarks(cv, marks, cv.py(0) - S(11));
         g.restore();
         // 不一致のとき：節のはずの位置で実際の変位が0でないことを線で示す
         if (!ok) {
@@ -485,19 +539,22 @@ function buildStanding(ctx) {
       }
     });
     if (ok) {
-      cv.hbracket(lam / 4, lam / 4 + lam / 2, -2.35, '節と節の間隔 λ/2 = ' + fmt(lam / 2, 2) + ' m', { color: C.guide });
-      cv.textPx('包絡線 ±2A cos(2πx/λ)　（2A = ' + fmt(2 * A, 2) + ' m）', cv.pad.l + 6, cv.pad.t + 12, { align: 'left', color: C.guide, size: 12, bold: true });
+      // 投影モードはラベルをブラケットの右へ（上に置くと波や y 軸の目盛りに重なる）
+      bracket(cv, lam / 4, lam / 4 + lam / 2, -2.35, '節と節の間隔 λ/2 = ' + fmt(lam / 2, 2) + ' m', { color: C.guide, place: 'right' });
+      if (cv.iw > S(600)) cv.textPx('包絡線 ±2A cos(2πx/λ)　（2A = ' + fmt(2 * A, 2) + ' m）', cv.pad.l + S(6), cv.pad.t + S(12), { align: 'left', color: C.guide, size: 12, bold: true });
       const xn = lam / 4, yn = Y1(xn, t) + Y2(xn, t);
       roN.set(fmt(yn, 6) + ' m（x = ' + fmt(xn, 2) + ' m）');
       roL.set('定在波（3つが一致）');
-      cv.textPx('定在波：節は動かない', cv.pad.l + cv.iw - 6, cv.pad.t + 12, { align: 'right', color: C.wave, size: 13, bold: true });
+      cv.textPx('定在波：節は動かない', cv.pad.l + cv.iw - S(6), cv.pad.t + S(12), { align: 'right', color: C.wave, size: 13, bold: true });
     } else {
       const xn = lam / 4, yn = Y1(xn, t) + Y2(xn, t);
       roN.set(fmt(yn, 6) + ' m（x = ' + fmt(xn, 2) + ' m）');
       roL.set('定在波ではありません');
-      cv.textPx('速さ・振幅・振動数が一致していないので定在波ではありません', cv.pad.l + cv.iw - 6, cv.pad.t + 12, { align: 'right', color: C.wave2, size: 13, bold: true });
-      const msg = '薄い「節」「腹」＝波1の条件で計算した位置。節のはずの場所でも変位が0になっていない（赤い線）';
-      cv.textPx(msg, cv.pad.l + 6, cv.pad.t + 30, { align: 'left', color: C.muted, size: fitSize(cv, msg, cv.iw - 12, 12) });
+      const ng = PROJ ? '定在波ではありません' : '速さ・振幅・振動数が一致していないので定在波ではありません';
+      cv.textPx(ng, cv.pad.l + cv.iw - S(6), cv.pad.t + S(12), { align: 'right', color: C.wave2, size: 13, bold: true });
+      const msg = PROJ ? '薄い「節」「腹」＝波1の条件での位置。節のはずでも変位が0でない（赤い線）'
+        : '薄い「節」「腹」＝波1の条件で計算した位置。節のはずの場所でも変位が0になっていない（赤い線）';
+      cv.textPx(msg, cv.pad.l + S(6), cv.pad.t + S(30), { align: 'left', color: C.muted, size: fitSize(cv, msg, cv.iw - S(12), 12) });
     }
   }
 
@@ -511,27 +568,29 @@ function buildStanding(ctx) {
       if (tS2.get()) cv.plot(x => Ys2(x, t), { color: C.wave, width: 4.0, x0: V.x0, x1: L });
       if (tI2.get()) {
         cv.plot(x => Yi2(x, t), { color: C.wave1, width: 2.0, dash: [7, 4], x0: V.x0, x1: L });
-        cv.plot(x => Yi2(x, t), { color: C.wave1, width: 1.6, dash: [7, 4], alpha: .3, x0: L, x1: V.x1 });
+        cv.plot(x => Yi2(x, t), { color: C.wave1, width: 1.6, dash: [7, 4], alpha: GA(.3), x0: L, x1: V.x1 });
       }
       if (tR2.get()) cv.plot(x => s * Yi2(2 * L - x, t), { color: C.wave2, width: 2.0, dash: [7, 4], x0: V.x0, x1: L });
       const envF = end === 'free' ? Math.cos : Math.sin;   // 自由端は壁が腹 → cos 型の包絡線
-      cv.plot(x => 2 * A * Math.abs(envF(TAU * (L - x) / lam)), { color: C.guide, width: 1.4, dash: [5, 5], alpha: .55, x0: V.x0, x1: L });
-      cv.plot(x => -2 * A * Math.abs(envF(TAU * (L - x) / lam)), { color: C.guide, width: 1.4, dash: [5, 5], alpha: .55, x0: V.x0, x1: L });
+      cv.plot(x => 2 * A * Math.abs(envF(TAU * (L - x) / lam)), { color: C.guide, width: 1.4, dash: [5, 5], alpha: GA(.55), x0: V.x0, x1: L });
+      cv.plot(x => -2 * A * Math.abs(envF(TAU * (L - x) / lam)), { color: C.guide, width: 1.4, dash: [5, 5], alpha: GA(.55), x0: V.x0, x1: L });
       // 壁からの節・腹（λ/4 刻み）
+      const marks = [];
       const nodeOff = (end === 'free') ? lam / 4 : 0;   // 壁から節までの距離
-      for (let d = nodeOff; d <= L - V.x0; d += lam / 2) { if (L - d >= V.x0) cv.text('節', L - d, 0, { color: C.node, size: 13, bold: true, dy: -11 }); }
+      for (let d = nodeOff; d <= L - V.x0; d += lam / 2) { if (L - d >= V.x0) marks.push([L - d, 'n']); }
       const antiOff = (end === 'free') ? 0 : lam / 4;
-      for (let d = antiOff; d <= L - V.x0; d += lam / 2) {
-        const x = L - d; if (x < V.x0) continue;
-        cv.text('腹', x, 0, { color: C.anti, size: 13, bold: true, dy: -11 });
-      }
+      for (let d = antiOff; d <= L - V.x0; d += lam / 2) { if (L - d >= V.x0) marks.push([L - d, 'a']); }
+      drawMarks(cv, marks, cv.py(0) - S(11));
     });
-    cv.line(L, V.y0, L, V.y1, { color: '#e8fff2', width: 3 });
-    cv.hbracket(L - lam / 4, L, 2.05, 'λ/4', { color: C.guide });
-    cv.hbracket(L - lam / 2, L, 2.45, 'λ/2', { color: C.guide });
-    cv.textPx(end === 'free' ? '自由端：壁が腹（変位の最大 2A = ' + fmt(2 * A, 1) + ' m）' : '固定端：壁が節（常に変位 0）',
-      cv.pad.l + 6, cv.pad.t + 12, { align: 'left', color: end === 'free' ? C.anti : C.node, size: 13, bold: true });
-    cv.textPx('仮想の領域', (cv.px(L) + cv.px(V.x1)) / 2, cv.pad.t + 12, { color: C.muted, size: 12, bg: false });
+    cv.line(L, V.y0, L, V.y1, { color: WALL, width: 3 });
+    // 投影モードはラベルを線の左右に振り分ける（上に置くと 2 本のラベルどうしが重なる）
+    bracket(cv, L - lam / 4, L, 2.05, 'λ/4', { color: C.guide, place: 'right' });
+    bracket(cv, L - lam / 2, L, 2.45, 'λ/2', { color: C.guide, place: 'left' });
+    const head2 = end === 'free'
+      ? (PROJ ? '自由端：壁が腹（最大 2A = ' + fmt(2 * A, 1) + ' m）' : '自由端：壁が腹（変位の最大 2A = ' + fmt(2 * A, 1) + ' m）')
+      : '固定端：壁が節（常に変位 0）';
+    cv.textPx(head2, cv.pad.l + S(6), cv.pad.t + S(12), { align: 'left', color: end === 'free' ? C.anti : C.node, size: fitSize(cv, head2, cv.px(L) - cv.pad.l, 13), bold: true });
+    if (cv.px(V.x1) - cv.px(L) > S(90)) cv.textPx('仮想の領域', (cv.px(L) + cv.px(V.x1)) / 2, cv.pad.t + S(12), { color: C.muted, size: 12, bg: false });
     roW.set(fmt(Ys2(L, t), 3) + ' m');
   }
 
@@ -582,10 +641,13 @@ function buildLT(ctx) {
   };
 
   const PADL = 58, PADR = 14, TOP = 2, BOT = 2;
+  /* 4段に区切る。setPad は値を SC 倍するので、実ピクセルで決めたい上下の余白は SC で割って渡す
+     （割らないと投影モードで帯が 1.6 倍ずれて図が崩れる）。左右は文字が大きくなるぶん SC 倍のままでよい。 */
   function band(k) {
     const bh = (cv.h - TOP - BOT) / 4, y0 = TOP + k * bh;
-    cv.setPad({ l: PADL, r: PADR, t: Math.round(y0) + 17, b: Math.round(cv.h - (y0 + bh)) + 6 });
-    return { top: Math.round(y0), bh };
+    const padT = Math.round(y0) + S(17), padB = Math.round(cv.h - (y0 + bh)) + S(6);
+    cv.setPad({ l: PADL, r: PADR, t: padT / SC, b: padB / SC });
+    return { top: Math.round(y0), bh, labelY: Math.round(y0) + S(9) };
   }
 
   return {
@@ -601,7 +663,7 @@ function buildLT(ctx) {
       let b = band(0);
       cv.setView({ x0: X0 - 0.3, x1: X1 + 0.3, y0: -1, y1: 1 });
       cv.axes({ xAxis: true, yAxis: false, grid: false, xTicks: false, yTicks: false });
-      cv.textPx('① 縦波の玉列（媒質の粒子）', PADL + 2, b.top + 9, { align: 'left', color: C.muted, size: 12, bg: false });
+      cv.textPx('① 縦波の玉列（媒質の粒子）', cv.pad.l + S(2), b.labelY, { align: 'left', color: C.muted, size: 12, bg: false });
       cv.clip(() => {
         for (let x = X0; x <= X1 + 1e-9; x += DX) {
           const near = Math.abs(Math.sin(TAU * x / lam)) > 0.99;
@@ -615,16 +677,16 @@ function buildLT(ctx) {
           cv.text(d > 0 ? '密' : '疎', x, 0.62, { color: d > 0 ? C.dens : C.muted, size: 14, bold: true });
         }
       }
-      const bandTop = cv.pad.t - 15;
+      const bandTop = cv.pad.t - S(15);
 
       /* ② 変位 */
       b = band(1);
       cv.setView({ x0: X0 - 0.3, x1: X1 + 0.3, y0: -yMax, y1: yMax });
       cv.axes({ yLabel: 'ξ [m]', grid: false, xTicks: false });
-      cv.textPx('② 変位の横波表示（右向きの変位を上に）', PADL + 2, b.top + 9, { align: 'left', color: C.muted, size: 12, bg: false });
+      cv.textPx('② 変位の横波表示（右向きの変位を上に）', cv.pad.l + S(2), b.labelY, { align: 'left', color: C.muted, size: 12, bg: false });
       cv.clip(() => {
-        cv.plot(x => 2 * A * Math.sin(TAU * x / lam), { color: C.guide, width: 1.3, dash: [5, 5], alpha: .5 });
-        cv.plot(x => -2 * A * Math.sin(TAU * x / lam), { color: C.guide, width: 1.3, dash: [5, 5], alpha: .5 });
+        cv.plot(x => 2 * A * Math.sin(TAU * x / lam), { color: C.guide, width: 1.3, dash: [5, 5], alpha: GA(.5) });
+        cv.plot(x => -2 * A * Math.sin(TAU * x / lam), { color: C.guide, width: 1.3, dash: [5, 5], alpha: GA(.5) });
         if (tC.get()) {
           cv.plot(x => XI1(x, t, lam, T, A), { color: C.wave1, width: 1.8, dash: [7, 4] });
           cv.plot(x => XI2(x, t, lam, T, A), { color: C.wave2, width: 1.8, dash: [7, 4] });
@@ -633,7 +695,7 @@ function buildLT(ctx) {
       });
       if (tC.get()) {
         const lg = '青破線 ξ₁（右へ）＋ 赤破線 ξ₂（左へ）＝ 緑の定在波';
-        cv.textPx(lg, cv.pad.l + cv.iw - 4, b.top + 9, { align: 'right', color: C.muted, size: fitSize(cv, lg, cv.iw * 0.6, 12) });
+        cv.textPx(lg, cv.pad.l + cv.iw - S(4), b.labelY, { align: 'right', color: C.muted, size: fitSize(cv, lg, cv.iw * 0.6, 12) });
       }
       const markY = cv.py(0);
       const markPx = [];
@@ -644,25 +706,29 @@ function buildLT(ctx) {
       b = band(2);
       cv.setView({ x0: X0 - 0.3, x1: X1 + 0.3, y0: -vMax, y1: vMax });
       cv.axes({ yLabel: 'v [m/s]', grid: false, xTicks: false });
-      cv.textPx('③ 媒質の速度 ∂ξ/∂t', PADL + 2, b.top + 9, { align: 'left', color: C.muted, size: 12, bg: false });
+      cv.textPx('③ 媒質の速度 ∂ξ/∂t', cv.pad.l + S(2), b.labelY, { align: 'left', color: C.muted, size: 12, bg: false });
       cv.clip(() => { cv.plot(vy, { color: C.vel, width: 3.0 }); });
 
       /* ④ 疎密 */
       b = band(3);
       cv.setView({ x0: X0 - 0.3, x1: X1 + 0.3, y0: -dMax, y1: dMax });
       cv.axes({ yLabel: '圧力', xLabel: 'x [m]', grid: false, xStep: 1 });
-      cv.textPx('④ 疎密（圧力変化 ∝ −∂ξ/∂x　上＝密・下＝疎）', PADL + 2, b.top + 9, { align: 'left', color: C.muted, size: 12, bg: false });
+      cv.textPx('④ 疎密（圧力変化 ∝ −∂ξ/∂x　上＝密・下＝疎）', cv.pad.l + S(2), b.labelY, { align: 'left', color: C.muted, size: 12, bg: false });
       cv.clip(() => { cv.plot(dn, { color: C.dens, width: 3.0 }); });
       const bandBot = cv.pad.t + cv.ih;
 
-      /* 節・腹の縦線とマーカー（①〜④を貫通） */
+      /* 節・腹の縦線とマーカー（①〜④を貫通）。縦線は全部引き、文字だけ詰まるときは間引く */
       if (tM.get()) {
-        for (const [kind, X] of markPx) {
-          cv.linePx(X, bandTop, X, bandBot, { color: kind === 'n' ? C.node : C.anti, width: 1.2, dash: [4, 4], alpha: .35 });
+        let lastX = -1e9;
+        for (const [kind, X] of markPx.slice().sort((p, q) => p[1] - q[1])) {
+          cv.linePx(X, bandTop, X, bandBot, { color: kind === 'n' ? C.node : C.anti, width: 1.2, dash: [4, 4], alpha: PROJ ? .5 : .35 });
+          if (X - lastX < S(26)) continue;
+          lastX = X;
           cv.textPx(kind === 'n' ? '節' : '腹', X, markY, { color: kind === 'n' ? C.node : C.anti, size: 13, bold: true });
         }
       }
-      cv.textPx('変位の節＝疎密の変化が最大／変位の腹＝疎密は変化しない', cv.pad.l + cv.iw - 4, bandTop + 10, { align: 'right', color: C.text, size: 12 });
+      const sum = PROJ ? '節＝疎密の変化が最大／腹＝疎密は変化しない' : '変位の節＝疎密の変化が最大／変位の腹＝疎密は変化しない';
+      if (cv.iw > S(620)) cv.textPx(sum, cv.pad.l + cv.iw - S(4), bandTop + S(10), { align: 'right', color: C.text, size: 12 });
     }
   };
 }
