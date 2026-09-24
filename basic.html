@@ -62,7 +62,7 @@ Nami.init({
         sliders(c);
         ui.sep(c);
         ui.toggle(c, { label: '射線を表示', checked: true, onChange: v => st.rays = v });
-        ui.note(c, '波面＝同じ振動状態（ここでは山）の点を結んだ線。射線＝波の進む向きを示す線で、波面に垂直。上段の平面波は左から右へ、下段の球面波は中心から広がる。右のグラフは黄色い線に沿って水面を切った断面。');
+        ui.note(c, '波面＝同じ振動状態（ここでは山）の点を結んだ線。射線＝波の進む向きを示す線で、波面に垂直。上段の平面波は左から右へ、下段の球面波は中心から広がる。右のグラフは破線に沿って水面を切った断面。');
         ui.toggle(ctx.detail, { label: '谷の波面（破線）も表示', checked: false, onChange: v => st.trough = v });
         ui.toggle(ctx.detail, { label: '球面波の振幅の減衰（1/√r）を入れる', checked: false, onChange: v => st.decay = v });
         ui.note(ctx.detail, '教科書の図では球面波の振幅は一定として描く。実際の水面波はエネルギーが広がるため遠くほど振幅が小さくなる（2次元では 1/√r）。');
