@@ -1,9 +1,23 @@
 /* なみラボ 共通スタイル（おとラボと同パレット） */
 :root{
-  --bg:#07100c; --panel:#101a15; --panel2:#14231c; --line:#264436;
-  --text:#e8fff2; --muted:#9ac5ad; --green:#54ff8a; --green2:#1fb85a;
+  --bg:#07100c; --bg2:#050a08; --panel:#101a15; --panel2:#14231c; --panel3:#0a1210; --canvas:#020503; --line:#264436;
+  --text:#e8fff2; --muted:#9ac5ad; --green:#54ff8a; --green2:#1fb85a; --onGreen:#001b0a;
   --red:#ff6b6b; --yellow:#ffd166; --blue:#69b7ff; --orange:#ffa64d; --purple:#c792ff; --cyan:#4dd0e1;
+  --statusBg:rgba(0,0,0,.5); --shadow:#000;
 }
+/* 投影モード（白地・黒字・濃い色・大きい文字）。common.js が html[data-mode=proj] を立てる */
+html[data-mode=proj]{
+  --bg:#ffffff; --bg2:#f0f3f1; --panel:#ffffff; --panel2:#eef2ef; --panel3:#e8ede9; --canvas:#ffffff; --line:#9fb0a5;
+  --text:#111111; --muted:#2f3a34; --green:#0a7d2c; --green2:#1a9a3a; --onGreen:#ffffff;
+  --red:#c8102e; --yellow:#8a5a00; --blue:#1d4fc4; --orange:#c65a00; --purple:#6a1fb5; --cyan:#00796b;
+  --statusBg:rgba(255,255,255,.85); --shadow:#fff;
+  font-size:118%;
+}
+html[data-mode=proj] .panelTitle{font-size:1.05rem;color:var(--text)}
+html[data-mode=proj] .controls .ctlLabel,html[data-mode=proj] .controls .note{color:var(--text)}
+html[data-mode=proj] .controls .formula b{color:var(--green)}
+html[data-mode=proj] button{font-weight:700}
+header.top .modeBtn{margin-left:.4rem;font-weight:800;padding:.35rem .7rem}
 *{box-sizing:border-box}
 [hidden]{display:none !important}
 /* 物理の変数＝斜体（数式エディタ風のセリフ体）。単位・関数名は立体のまま */
@@ -14,12 +28,12 @@ body{display:flex;flex-direction:column;overflow-x:hidden}
 button,input,select{font:inherit}
 button{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:8px;padding:.5rem .75rem;cursor:pointer;line-height:1.2}
 button:active{transform:translateY(1px)}
-button.active{background:var(--green2);border-color:var(--green);color:#001b0a}
-button.primary{background:var(--green2);border-color:var(--green);color:#001b0a;font-weight:800}
+button.active{background:var(--green2);border-color:var(--green);color:var(--onGreen)}
+button.primary{background:var(--green2);border-color:var(--green);color:var(--onGreen);font-weight:800}
 a{color:var(--blue)}
 
 /* ヘッダー */
-header.top{display:flex;align-items:center;gap:.6rem;padding:.45rem .8rem;background:#050a08;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header.top{display:flex;align-items:center;gap:.6rem;padding:.45rem .8rem;background:var(--bg2);border-bottom:1px solid var(--line);flex-wrap:wrap}
 header.top .crumb{color:var(--muted);font-size:.95rem;display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
 header.top .crumb a{color:var(--muted);text-decoration:none}
 header.top .crumb a:hover{color:var(--text)}
@@ -27,7 +41,7 @@ header.top .title{font-weight:900;font-size:clamp(1.05rem,2.4vw,1.35rem);color:v
 header.top .right{margin-left:auto;color:var(--muted);font-size:.85rem}
 
 /* タブ */
-nav.tabs{display:flex;gap:.45rem;padding:.5rem .65rem;background:#050a08;border-bottom:1px solid var(--line);overflow-x:auto}
+nav.tabs{display:flex;gap:.45rem;padding:.5rem .65rem;background:var(--bg2);border-bottom:1px solid var(--line);overflow-x:auto}
 nav.tabs button{flex:1 0 auto;font-weight:800;font-size:clamp(.95rem,2.2vw,1.15rem);white-space:nowrap}
 
 /* ビュー */
@@ -55,37 +69,37 @@ main{flex:1 0 auto;display:flex;flex-direction:column}
 .panel{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;overflow:hidden;min-height:200px}
 .panel.max{min-height:70vh}
 .panel.hiddenByMax{display:none}
-.panelTitle{padding:.3rem .6rem;font-size:.9rem;font-weight:700;color:var(--muted);border-bottom:1px solid var(--line);background:#0b1510;cursor:pointer;user-select:none;-webkit-user-select:none}
-.panel canvas{display:block;width:100%;flex:1 1 0;height:0;min-height:160px;touch-action:none;background:#020503;cursor:pointer}
-.panel .overlay{position:absolute;right:.5rem;top:.35rem;pointer-events:none;color:var(--yellow);font-weight:800;font-size:clamp(.95rem,2vw,1.2rem);text-shadow:0 0 6px #000}
-.panel .overlayTL{position:absolute;left:.5rem;top:2rem;pointer-events:none;color:var(--muted);font-size:.85rem;text-shadow:0 0 6px #000}
-.status{position:absolute;left:.6rem;bottom:.5rem;color:var(--yellow);font-weight:800;background:rgba(0,0,0,.5);padding:.2rem .45rem;border-radius:6px;pointer-events:none;font-size:.9rem}
+.panelTitle{padding:.3rem .6rem;font-size:.9rem;font-weight:700;color:var(--muted);border-bottom:1px solid var(--line);background:var(--panel2);cursor:pointer;user-select:none;-webkit-user-select:none}
+.panel canvas{display:block;width:100%;flex:1 1 0;height:0;min-height:160px;touch-action:none;background:var(--canvas);cursor:pointer}
+.panel .overlay{position:absolute;right:.5rem;top:.35rem;pointer-events:none;color:var(--yellow);font-weight:800;font-size:clamp(.95rem,2vw,1.2rem);text-shadow:0 0 6px var(--shadow)}
+.panel .overlayTL{position:absolute;left:.5rem;top:2rem;pointer-events:none;color:var(--muted);font-size:.85rem;text-shadow:0 0 6px var(--shadow)}
+.status{position:absolute;left:.6rem;bottom:.5rem;color:var(--yellow);font-weight:800;background:var(--statusBg);padding:.2rem .45rem;border-radius:6px;pointer-events:none;font-size:.9rem}
 
 /* 時間バー */
-.timebar{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;padding:.45rem .55rem;border:1px solid var(--line);border-radius:8px;background:#0b1510}
+.timebar{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;padding:.45rem .55rem;border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
 .timebar button{padding:.4rem .65rem;font-weight:800}
 .timebar input[type=range]{flex:1;min-width:120px;accent-color:var(--green)}
 .timebar .tval{min-width:6.5rem;text-align:right;font-variant-numeric:tabular-nums;color:var(--green);font-weight:800}
 .timebar .detailBtn{margin-left:auto}
 
 /* 操作パネル */
-.controls{display:flex;gap:.5rem .9rem;align-items:center;flex-wrap:wrap;padding:.5rem .6rem;border:1px solid var(--line);border-radius:8px;background:#0b1510}
-.controls.detail{border-style:dashed;background:#0a1210}
+.controls{display:flex;gap:.5rem .9rem;align-items:center;flex-wrap:wrap;padding:.5rem .6rem;border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
+.controls.detail{border-style:dashed;background:var(--panel3)}
 .controls .ctl{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
 .controls .ctlLabel{color:var(--muted);font-size:.92rem;white-space:nowrap}
 .controls .sep{width:1px;align-self:stretch;background:var(--line)}
 .controls input[type=range]{width:140px;accent-color:var(--green)}
 .controls .val{min-width:4.6rem;font-variant-numeric:tabular-nums;color:var(--text);font-weight:700}
 .controls input[type=checkbox]{width:1.15rem;height:1.15rem;accent-color:var(--green)}
-.controls select{background:#07100c;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:.4rem}
-.controls input[type=number]{width:6rem;background:#07100c;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:.4rem}
+.controls select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:.4rem}
+.controls input[type=number]{width:6rem;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:.4rem}
 .controls .note{color:var(--muted);font-size:.85rem;flex-basis:100%}
 .controls .readout{font-weight:800;color:var(--yellow);font-variant-numeric:tabular-nums}
 .controls .formula{font-family:"Cambria Math","STIX Two Math","Latin Modern Math",Georgia,serif;font-size:clamp(1rem,2.2vw,1.25rem);color:var(--text);flex-basis:100%;line-height:1.7}
 .controls .formula b{color:var(--green);font-weight:700}
 .swatch{display:inline-block;width:.9rem;height:.9rem;border-radius:3px;vertical-align:-.1rem;margin-right:.25rem}
 
-footer{padding:.45rem .8rem;color:var(--muted);background:#050a08;border-top:1px solid var(--line);font-size:.85rem}
+footer{padding:.45rem .8rem;color:var(--muted);background:var(--bg2);border-top:1px solid var(--line);font-size:.85rem}
 
 /* TOP（カード） */
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.8rem;padding:1rem;max-width:1100px;margin:0 auto;width:100%}

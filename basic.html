@@ -27,9 +27,7 @@ function shadeField(cv, fn, scale = 3) {
     for (let i = 0; i < w; i++) {
       const x = cv.wx(cv.pad.l + (i + .5) * cv.iw / w);
       const s = clamp(fn(x, y), -1, 1); const k = (j * w + i) * 4;
-      if (s >= 0) { d[k] = 2 + 82 * s; d[k + 1] = 5 + 200 * s; d[k + 2] = 3 + 100 * s; }
-      else { d[k] = 2 + 18 * -s; d[k + 1] = 5 + 40 * -s; d[k + 2] = 3 + 90 * -s; }
-      d[k + 3] = 255;
+      const c = C.shade(s); d[k] = c[0]; d[k + 1] = c[1]; d[k + 2] = c[2]; d[k + 3] = 255;
     }
   }
   cv._off.getContext('2d').putImageData(cv._img, 0, 0);
@@ -94,7 +92,7 @@ Nami.init({
             cvPg.axes({ xLabel: 'x [m]', yLabel: 'y [m]', yStep: 0.5 });
             cvPg.clip(() => { cvPg.plot(x => S.A * Math.sin(TAU * (ph - x / S.L)), { color: C.wave, width: 2.5 }); });
             crests(t).forEach(x => { if (x <= XW) cvPg.dot(x, S.A, 4, { color: C.wave }); });
-            cvPg.textPx('カット線（黄）に沿った断面', cvPg.pad.l + cvPg.iw - 4, cvPg.pad.t + 4, { align: 'right', baseline: 'top', color: C.yellow });
+            cvPg.textPx('カット線（破線）に沿った断面', cvPg.pad.l + cvPg.iw - 4, cvPg.pad.t + 4, { align: 'right', baseline: 'top', color: C.yellow });
             /* --- 球面波 上面 --- */
             cvS.clear(); cvS.setViewIso(0, 0, RW * 1.05);
             shadeField(cvS, (x, y) => { const r = Math.hypot(x, y); return (ampS(r) / S.A) * Math.sin(TAU * (ph - r / S.L)); });
@@ -113,7 +111,7 @@ Nami.init({
             cvSg.axes({ xLabel: 'r [m]（波源からの距離）', yLabel: 'y [m]', yStep: 0.5 });
             cvSg.clip(() => { cvSg.plot(r => ampS(r) * Math.sin(TAU * (ph - r / S.L)), { color: C.wave, width: 2.5 }); });
             crests(t).forEach(r => { if (r > 0 && r <= RW) cvSg.dot(r, ampS(r), 4, { color: C.wave }); });
-            cvSg.textPx('射線（黄）に沿った断面 θ = ' + fmt(st.cutAng * 180 / Math.PI, 0) + '°', cvSg.pad.l + cvSg.iw - 4, cvSg.pad.t + 4, { align: 'right', baseline: 'top', color: C.yellow });
+            cvSg.textPx('射線（破線）に沿った断面 θ = ' + fmt(st.cutAng * 180 / Math.PI, 0) + '°', cvSg.pad.l + cvSg.iw - 4, cvSg.pad.t + 4, { align: 'right', baseline: 'top', color: C.yellow });
           }
         };
       }

@@ -23,12 +23,28 @@
  */
 'use strict';
 window.Nami = (() => {
-  const C = {
-    bg: '#020503', panel: '#101a15', line: '#264436', text: '#e8fff2', muted: '#9ac5ad',
-    wave: '#54ff8a', wave1: '#69b7ff', wave2: '#ff6b6b', vel: '#ffa64d', dens: '#c792ff',
-    node: '#ffd166', anti: '#4dd0e1', guide: '#9ac5ad', grid: '#17271e', axis: '#5d8f74',
-    ghost: 'rgba(232,255,242,0.35)', yellow: '#ffd166'
+  /* ---- 表示モード: 'dark'（手元でいじる・既定）／'proj'（投影: 白地・黒字・濃い色・太線・大きい文字）。URL ?mode=proj が最優先、次に前回の選択（localStorage） ---- */
+  const MODE = (() => { let m = null; try { m = new URLSearchParams(location.search).get('mode'); } catch (_) { } if (m !== 'proj' && m !== 'dark') { try { m = localStorage.getItem('nami.mode'); } catch (_) { m = null; } } if (m !== 'proj') m = 'dark'; try { localStorage.setItem('nami.mode', m); } catch (_) { } return m; })();
+  const PROJ = MODE === 'proj';
+  document.documentElement.dataset.mode = MODE;
+  const SC = PROJ ? 1.6 : 1; // 投影モードの線幅・文字・点の倍率
+  const PALETTE = {
+    dark: {
+      bg: '#020503', panel: '#101a15', line: '#264436', text: '#e8fff2', muted: '#9ac5ad',
+      wave: '#54ff8a', wave1: '#69b7ff', wave2: '#ff6b6b', vel: '#ffa64d', dens: '#c792ff',
+      node: '#ffd166', anti: '#4dd0e1', guide: '#9ac5ad', grid: '#17271e', axis: '#5d8f74',
+      ghost: 'rgba(232,255,242,0.35)', yellow: '#ffd166', textBg: 'rgba(2,5,3,0.75)', pos: [84, 255, 138], neg: [40, 90, 200]
+    },
+    proj: {
+      bg: '#ffffff', panel: '#ffffff', line: '#9fb0a5', text: '#111111', muted: '#2f3a34',
+      wave: '#0a7d2c', wave1: '#1d4fc4', wave2: '#c8102e', vel: '#c65a00', dens: '#6a1fb5',
+      node: '#5a3a00', anti: '#00796b', guide: '#555555', grid: '#dfe5e1', axis: '#333333',
+      ghost: 'rgba(0,0,0,0.4)', yellow: '#8a5a00', textBg: 'rgba(255,255,255,0.85)', pos: [30, 90, 210], neg: [210, 40, 60]
+    }
   };
+  const C = Object.assign({}, PALETTE[MODE]);
+  // 濃淡塗り（山＝pos／谷＝neg・値 s∈[-1,1]）→ [r,g,b]。投影モードは白地に青／赤
+  C.shade = s => { const k = Math.min(1, Math.abs(s)); const base = PROJ ? [255, 255, 255] : [2, 5, 3]; const col = s >= 0 ? C.pos : C.neg; return [0, 1, 2].map(i => Math.round(base[i] + (col[i] - base[i]) * k)); };
   const TAU = Math.PI * 2;
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
   const frac = p => p - Math.floor(p);
@@ -102,7 +118,7 @@ window.Nami = (() => {
       parent.appendChild(this.box);
       this.ctx = this.el.getContext('2d');
       this.handles = []; this.onClick = opt.onClick || null; this.onDrag = null; this.onDrawRequest = null;
-      this.pad = { l: 46, r: 18, t: 16, b: 32 };
+      this.pad = { l: Math.round(46 * SC), r: Math.round(18 * SC), t: Math.round(16 * SC), b: Math.round(32 * SC) };
       this.view = { x0: 0, x1: 10, y0: -2, y1: 2 };
       this.w = 0; this.h = 0; this.dpr = 1;
       this._ro = new ResizeObserver(() => this.resize());
@@ -125,7 +141,7 @@ window.Nami = (() => {
       this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     /* --- 座標 --- */
-    setPad(p) { Object.assign(this.pad, p); return this; }
+    setPad(p) { for (const k in p) this.pad[k] = Math.round(p[k] * SC); return this; }
     setView(v) { Object.assign(this.view, v); return this; }
     setViewIso(cx, cy, halfW) { // 等方（縦横同縮尺）。横半幅 halfW を基準に縦を決める
       const iw = Math.max(1, this.iw), ih = Math.max(1, this.ih);
@@ -144,28 +160,31 @@ window.Nami = (() => {
     /* --- 基本描画 --- */
     clear(bg = C.bg) { const g = this.ctx; g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, this.el.width, this.el.height); g.restore(); g.fillStyle = bg; g.fillRect(0, 0, this.w, this.h); }
     clip(fn) { const g = this.ctx; g.save(); g.beginPath(); g.rect(this.pad.l, this.pad.t, this.iw, this.ih); g.clip(); fn(); g.restore(); }
-    _stroke(o) { const g = this.ctx; g.strokeStyle = o.color || C.text; g.lineWidth = o.width || 2; g.setLineDash(o.dash || []); g.globalAlpha = o.alpha == null ? 1 : o.alpha; g.lineCap = 'round'; g.lineJoin = 'round'; }
+    _stroke(o) { const g = this.ctx; g.strokeStyle = o.color || C.text; g.lineWidth = (o.width || 2) * SC; g.setLineDash(o.dash ? o.dash.map(d => d * SC) : []); g.globalAlpha = o.alpha == null ? 1 : o.alpha; g.lineCap = 'round'; g.lineJoin = 'round'; }
     _done() { const g = this.ctx; g.setLineDash([]); g.globalAlpha = 1; }
     axes(o = {}) {
       const g = this.ctx, v = this.view;
-      const xs = o.xStep || niceStep(v.x1 - v.x0), ys = o.yStep || niceStep(v.y1 - v.y0);
+      let xs = o.xStep || niceStep(v.x1 - v.x0), ys = o.yStep || niceStep(v.y1 - v.y0);
+      // 目盛りが詰まりすぎる（投影モードの大きな文字など）ときは間引く
+      while (ys * this.sy < 18 * SC && ys < (v.y1 - v.y0)) ys *= 2;
+      while (xs * this.sx < 34 * SC && xs < (v.x1 - v.x0)) xs *= 2;
       const xAxisY = (v.y0 <= 0 && v.y1 >= 0) ? 0 : v.y0, yAxisX = (v.x0 <= 0 && v.x1 >= 0) ? 0 : v.x0;
       g.save();
       // grid
       if (o.grid !== false) {
-        g.strokeStyle = C.grid; g.lineWidth = 1; g.beginPath();
+        g.strokeStyle = C.grid; g.lineWidth = SC; g.beginPath();
         for (let x = Math.ceil(v.x0 / xs) * xs; x <= v.x1 + 1e-9; x += xs) { const p = Math.round(this.px(x)) + .5; g.moveTo(p, this.pad.t); g.lineTo(p, this.pad.t + this.ih); }
         for (let y = Math.ceil(v.y0 / ys) * ys; y <= v.y1 + 1e-9; y += ys) { const p = Math.round(this.py(y)) + .5; g.moveTo(this.pad.l, p); g.lineTo(this.pad.l + this.iw, p); }
         g.stroke();
       }
       // axes
-      g.strokeStyle = C.axis; g.lineWidth = 1.5; g.beginPath();
+      g.strokeStyle = C.axis; g.lineWidth = 1.5 * SC; g.beginPath();
       const ay = this.py(xAxisY), ax = this.px(yAxisX);
       if (o.xAxis !== false) { g.moveTo(this.pad.l, ay); g.lineTo(this.pad.l + this.iw, ay); }
       if (o.yAxis !== false) { g.moveTo(ax, this.pad.t); g.lineTo(ax, this.pad.t + this.ih); }
       g.stroke();
       // ticks
-      g.fillStyle = C.muted; g.font = '12px system-ui,sans-serif';
+      g.fillStyle = C.muted; g.font = Math.round(12 * SC) + 'px system-ui,sans-serif';
       if (o.xTicks !== false) {
         g.textAlign = 'center'; g.textBaseline = 'top';
         const dx = Math.max(0, -Math.floor(Math.log10(xs)));
@@ -212,25 +231,25 @@ window.Nami = (() => {
     arrow(x1, y1, x2, y2, o = {}) { this.arrowPx(this.px(x1), this.py(y1), this.px(x2), this.py(y2), o); }
     arrowPx(X1, Y1, X2, Y2, o = {}) {
       const g = this.ctx; const dx = X2 - X1, dy = Y2 - Y1, L = Math.hypot(dx, dy); if (L < 1.5) { if (o.zeroDot) this.dotPx(X1, Y1, 3, { color: o.color }); return; }
-      const h = Math.min(o.head || 9, L * 0.6), ux = dx / L, uy = dy / L;
+      const h = Math.min((o.head || 9) * SC, L * 0.6), ux = dx / L, uy = dy / L;
       this._stroke(o); g.beginPath(); g.moveTo(X1, Y1); g.lineTo(X2 - ux * h * 0.6, Y2 - uy * h * 0.6); g.stroke();
       g.fillStyle = o.color || C.text; g.beginPath(); g.moveTo(X2, Y2); g.lineTo(X2 - ux * h - uy * h * 0.5, Y2 - uy * h + ux * h * 0.5); g.lineTo(X2 - ux * h + uy * h * 0.5, Y2 - uy * h - ux * h * 0.5); g.closePath(); g.fill(); this._done();
     }
     dot(x, y, r = 4, o = {}) { this.dotPx(this.px(x), this.py(y), r, o); }
-    dotPx(X, Y, r = 4, o = {}) { const g = this.ctx; g.globalAlpha = o.alpha == null ? 1 : o.alpha; g.fillStyle = o.color || C.text; g.beginPath(); g.arc(X, Y, r, 0, TAU); g.fill(); if (o.stroke) { g.strokeStyle = o.stroke; g.lineWidth = o.width || 1.5; g.stroke(); } g.globalAlpha = 1; }
+    dotPx(X, Y, r = 4, o = {}) { const g = this.ctx; g.globalAlpha = o.alpha == null ? 1 : o.alpha; g.fillStyle = o.color || C.text; g.beginPath(); g.arc(X, Y, r * SC, 0, TAU); g.fill(); if (o.stroke) { g.strokeStyle = o.stroke; g.lineWidth = o.width || 1.5; g.stroke(); } g.globalAlpha = 1; }
     circle(x, y, rWorld, o = {}) { // 半径はワールド（x縮尺）。等方ビューで使う
       const g = this.ctx; this._stroke(o); g.beginPath(); g.ellipse(this.px(x), this.py(y), rWorld * this.sx, rWorld * this.sy, 0, o.a0 || 0, o.a1 == null ? TAU : o.a1); if (o.fill) { g.fillStyle = o.fill; g.fill(); } if (o.color !== 'none') g.stroke(); this._done();
     }
     text(str, x, y, o = {}) { this.textPx(str, this.px(x), this.py(y), o); }
     textPx(str, X, Y, o = {}) { // 変数は斜体・単位は立体（o.rich===false で無効）
-      const g = this.ctx; g.save(); const size = o.size || 13;
+      const g = this.ctx; g.save(); const size = (o.size || 13) * SC;
       const fontOf = it => (it ? `italic ${o.bold ? 'bold ' : ''}${Math.round(size * 1.1)}px "Times New Roman","Cambria Math","STIX Two Math",Times,serif` : `${o.bold ? 'bold ' : ''}${size}px system-ui,sans-serif`);
       const runs = o.rich === false ? [{ t: String(str), i: false }] : mathRuns(str);
       runs.forEach(r => { g.font = fontOf(r.i); r.w = g.measureText(r.t).width; });
       const W = runs.reduce((s, r) => s + r.w, 0);
       const align = o.align || 'center'; g.textBaseline = o.baseline || 'middle'; X += o.dx || 0; Y += o.dy || 0;
       let x0 = align === 'center' ? X - W / 2 : align === 'right' ? X - W : X;
-      if (o.bg !== false) { const w = W + 6, h = size + 4; let by = Y - h / 2; if (g.textBaseline === 'top') by = Y - 2; if (g.textBaseline === 'bottom') by = Y - h + 2; g.fillStyle = o.bg || 'rgba(2,5,3,0.75)'; g.fillRect(x0 - 3, by, w, h); }
+      if (o.bg !== false) { const w = W + 6, h = size + 4; let by = Y - h / 2; if (g.textBaseline === 'top') by = Y - 2; if (g.textBaseline === 'bottom') by = Y - h + 2; g.fillStyle = o.bg || C.textBg; g.fillRect(x0 - 3, by, w, h); }
       g.fillStyle = o.color || C.text; g.textAlign = 'left';
       runs.forEach(r => { g.font = fontOf(r.i); g.fillText(r.t, x0, Y); x0 += r.w; });
       g.restore();
@@ -247,7 +266,7 @@ window.Nami = (() => {
     }
     /* --- ドラッグ点 --- */
     addHandle(h) { h.r = h.r || 20; this.handles.push(h); return h; }
-    drawHandles() { for (const h of this.handles) { if (h.hidden) continue; const q = h.get(); const X = this.px(q.x), Y = this.py(q.y); this.dotPx(X, Y, h.size || 7, { color: h.color || C.yellow, stroke: '#000', width: 1.5 }); if (h.label) this.textPx(h.label, X, Y, { dy: -16, color: h.color || C.yellow, bold: true }); } }
+    drawHandles() { for (const h of this.handles) { if (h.hidden) continue; const q = h.get(); const X = this.px(q.x), Y = this.py(q.y); this.dotPx(X, Y, h.size || 7, { color: h.color || C.yellow, stroke: PROJ ? '#fff' : '#000', width: 1.5 }); if (h.label) this.textPx(h.label, X, Y, { dy: -16, color: h.color || C.yellow, bold: true }); } }
     _pt(e) { const r = this.el.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     _hit(p) { for (const h of this.handles) { if (h.hidden) continue; const q = h.get(); if (Math.hypot(this.px(q.x) - p.x, this.py(q.y) - p.y) <= h.r) return h; } return null; }
     _bindPointer() {
@@ -353,6 +372,8 @@ window.Nami = (() => {
       if (this.canScrub) { b.appendChild(this.range); this.range.addEventListener('input', () => { this.pause(); this.t = parseFloat(this.range.value); }); }
       this.tval = el('span', 'tval', 't = 0.00 s'); b.appendChild(this.tval);
       this.detailBtn = ui.button(b, { label: '詳しく', className: 'detailBtn', onClick: () => this.toggleDetail() });
+      this.ctlBtn = ui.button(b, { label: '操作を隠す', onClick: () => { const c = this.tab.ctx.controls; c.hidden = !c.hidden; this.ctlBtn.textContent = c.hidden ? '操作を表示' : '操作を隠す'; if (c.hidden) { this.tab.ctx.detail.hidden = true; this.detailBtn.classList.remove('active'); } this.tab.ctx.canvases.forEach(cv => cv.resize()); } });
+      this.ctlBtn.title = '図を大きく見せたいときに操作パネルを畳む';
     }
     period() { const T = this.tab.period ? this.tab.period() : 2; return (T > 0 && isFinite(T)) ? T : 2; }
     setRunning(r) { this.running = r; this.playBtn.textContent = r ? '⏸ 停止' : '▶ 再開'; this.playBtn.classList.toggle('active', !r); this.app.showStatus(this, r ? '' : '⏸ 停止中（クリックで再開）'); }
@@ -385,6 +406,10 @@ window.Nami = (() => {
     const a2 = el('a', null, 'なみラボ'); a2.href = './index.html'; crumb.appendChild(a2); crumb.appendChild(document.createTextNode('›'));
     crumb.appendChild(el('span', 'title', o.title)); header.appendChild(crumb);
     header.appendChild(el('span', 'right', 'クリック=停止/再開　◀▶=コマ送り　Space/←→キー可'));
+    // 表示モード切替（投影／手元）。選択を保存してページを読み直す（色定数は読み込み時に確定するため）
+    const modeBtn = el('button', 'modeBtn', PROJ ? '手元モードへ' : '投影モードへ'); modeBtn.title = PROJ ? '暗い背景・細い線（手元でいじる用）に切り替える' : '白地・黒字・太線・大きい文字（プロジェクター投影用）に切り替える';
+    modeBtn.addEventListener('click', () => { const next = PROJ ? 'dark' : 'proj'; try { localStorage.setItem('nami.mode', next); } catch (_) { } const u = new URL(location.href); u.searchParams.set('mode', next); location.href = u.toString(); });
+    header.appendChild(modeBtn);
     document.body.appendChild(header);
     const nav = el('nav', 'tabs'); document.body.appendChild(nav);
     const main = el('main'); document.body.appendChild(main);
@@ -454,5 +479,5 @@ window.Nami = (() => {
     if (o.pen !== false && t >= 0) cv.dot(t, o.y(t), 5, { color: o.color || C.wave, stroke: '#000' });
   }
 
-  return { C, TAU, clamp, frac, fmt, el, niceStep, hexA, mathHTML, mathRuns, Canvas, ui, Wave, Sim, init, recorder, recorderWindow, app };
+  return { C, MODE, PROJ, SC, TAU, clamp, frac, fmt, el, niceStep, hexA, mathHTML, mathRuns, Canvas, ui, Wave, Sim, init, recorder, recorderWindow, app };
 })();
