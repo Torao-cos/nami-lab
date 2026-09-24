@@ -13,14 +13,40 @@
   /* 14 反射タブ: 現象（広）＋ 作図（壁に沿って縦長なので細くてよい） */
   .stage.stageRL{grid-template-columns:1.35fr 1fr}
   @media (max-width:760px){ .panel{min-height:300px} .stage.stageIF,.stage.stageRL{grid-template-columns:1fr} }
+  /* 投影モード: 文字・線が 1.6 倍になるぶん操作パネルが高くなるので、図が最低限の高さを保てるようにする */
+  html[data-mode=proj] .panel{min-height:345px}
+  html[data-mode=proj] .panel canvas{min-height:295px}
+  @media (max-width:760px){ html[data-mode=proj] .panel{min-height:260px} }
 </style>
 </head><body>
 <script src="common.js"></script>
 <script>
 (() => {
 'use strict';
-const { C, TAU, ui, fmt, clamp, hexA } = Nami;
+const { C, TAU, ui, fmt, clamp, hexA, PROJ, SC } = Nami;
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
+
+/* ===== 投影モード（白地・黒字・濃い色・太線・大きい文字）用の色 =====
+   common.css / common.js は編集しない。ページ側で色を直書きしている所だけ、白地に映える色に差し替える。 */
+const WALLC = PROJ ? '#4b554f' : '#8fd6b0';                                    // 壁・境界の線（投影＝濃い灰）
+const WALLFILL = PROJ ? 'rgba(75,85,79,0.12)' : 'rgba(143,214,176,0.12)';      // 壁の向こう側の地色
+const MED1BG = PROJ ? 'rgba(29,79,196,0.09)' : 'rgba(105,183,255,0.055)';      // 媒質1の地色
+const MED2BG = PROJ ? 'rgba(106,31,181,0.10)' : 'rgba(199,146,255,0.075)';     // 媒質2の地色
+const GA = (a, p) => hexA(C.guide, PROJ ? p : a);                              // 補助線の灰（白地では濃くする）
+/* 濃淡塗り（波動タンク・干渉）: 投影＝白地に青（山）／赤（谷）・0 は白。手元＝黒地に緑／青の発光色。
+   1ピクセルごとに呼ぶので Nami.C.shade を 256 段のテーブルに焼いておく。 */
+const SHADE_N = 256;
+const SHADE_LUT = (() => {
+  const a = new Uint8Array(3 * (2 * SHADE_N + 1));
+  for (let k = -SHADE_N; k <= SHADE_N; k++) { const c = C.shade(k / SHADE_N), o = 3 * (k + SHADE_N); a[o] = c[0]; a[o + 1] = c[1]; a[o + 2] = c[2]; }
+  return a;
+})();
+function putShade(d, o, sv) {
+  let k = (sv * SHADE_N) | 0; if (k > SHADE_N) k = SHADE_N; else if (k < -SHADE_N) k = -SHADE_N;
+  const p = 3 * (k + SHADE_N); d[o] = SHADE_LUT[p]; d[o + 1] = SHADE_LUT[p + 1]; d[o + 2] = SHADE_LUT[p + 2];
+}
+const WALL_RGB = PROJ ? [148, 156, 150] : [124, 134, 128];    // 14 の壁（面が広いので中間の灰。白地で重くしない）
+const BAR_RGB = PROJ ? [70, 78, 73] : [124, 134, 128];        // 17 の障壁（細い線なので濃い灰）
 
 /* ===== 計測（fps）: window.__nami_debug ===== */
 const DBG = (window.__nami_debug = { tab: '', fps: 0, frames: 0, grid: '', _n: 0, _t0: performance.now() });
@@ -118,7 +144,7 @@ function buildHuygens(ctx) {
       const r = st.auto ? rAuto : st.rq * lam;
       const dt = st.auto ? fr * T : (st.rq * lam) / v;
       const N = st.N | 0;
-      const gray = hexA(C.guide, 0.5);
+      const gray = GA(0.5, 0.85);
 
       if (st.mode === 'plane') {
         const xs = V.x0 + 0.8;
@@ -170,7 +196,7 @@ function buildHuygens(ctx) {
           cv.circle(S.x, S.y, R0 + r, { color: C.wave, width: 3, dash: solid ? [] : [9, 7], a0: -thMax, a1: thMax });
           cv.text('新しい波面', S.x + (R0 + r) * Math.cos(thMax * .55), S.y + (R0 + r) * Math.sin(thMax * .55), { dy: -12, color: C.wave, bold: true });
         }
-        cv.dot(S.x, S.y, 6, { color: C.yellow, stroke: '#000' });
+        cv.dot(S.x, S.y, 6, { color: C.yellow, stroke: PROJ ? '#fff' : '#000' });
         cv.text('点波源', S.x, S.y, { dy: 16, color: C.yellow, bold: true });
         cv.text('元の波面', S.x + R0 * Math.cos(-thMax * .62), S.y + R0 * Math.sin(-thMax * .62), { dy: 14, color: C.wave, bold: true });
       }
@@ -259,10 +285,11 @@ function createTank(cv, cfg) {
     const d = img.data, gg = cfg.gain() * 1.7 / Math.max(lvl, 1e-3);
     for (let k = 0, n = nx * ny; k < n; k++) {
       const o = 4 * k;
-      if (wall[k]) { d[o] = 124; d[o + 1] = 134; d[o + 2] = 128; continue; }
+      if (wall[k]) { d[o] = WALL_RGB[0]; d[o + 1] = WALL_RGB[1]; d[o + 2] = WALL_RGB[2]; continue; }
       let v = u[k] * gg; if (v > 1) v = 1; else if (v < -1) v = -1;
-      const m = v * v;   // 弱いところは暗く（全反射で媒質2がぼんやり光るのを防ぐ）
-      if (v >= 0) { d[o] = 84 * m; d[o + 1] = 255 * m; d[o + 2] = 138 * m; }
+      const m = PROJ ? Math.abs(v) : v * v;   // 弱いところは淡く（全反射で媒質2がぼんやり見えるのを防ぐ）
+      if (PROJ) putShade(d, o, v >= 0 ? m : -m);
+      else if (v >= 0) { d[o] = 84 * m; d[o + 1] = 255 * m; d[o + 2] = 138 * m; }
       else { d[o] = 60 * m; d[o + 1] = 130 * m; d[o + 2] = 255 * m; }
     }
     offg.putImageData(img, 0, 0);
@@ -406,7 +433,7 @@ function buildReflect(ctx) {
     const corners = [[V.x0, V.y0], [V.x1, V.y0], [V.x1, V.y1], [V.x0, V.y1]];
     // 壁の向こう側
     const poly = clipPoly(corners, g.n.x, g.n.y, 0);
-    if (poly.length >= 3) cvA.plotPts(poly, { close: true, fill: 'rgba(143,214,176,0.12)', color: 'none' });
+    if (poly.length >= 3) cvA.plotPts(poly, { close: true, fill: WALLFILL, color: 'none' });
     let qLo = 1e9, qHi = -1e9;
     corners.forEach(c => { const q = c[0] * g.w.x + c[1] * g.w.y; if (q < qLo) qLo = q; if (q > qHi) qHi = q; });
     const diag = Math.hypot(V.x1 - V.x0, V.y1 - V.y0);
@@ -452,7 +479,7 @@ function buildReflect(ctx) {
       }
       // 射線・法線・角
       if (st.ray) {
-        const gd = hexA(C.guide, .75), Lr = diag * 0.34;
+        const gd = GA(.75, .9), Lr = diag * 0.34;
         for (let k = 1; k <= 5; k++) {
           const q = qLo + (qHi - qLo) * k / 6, P = toW(g, 0, q);
           cvA.arrow(P.x - D.d.x * Lr, P.y - D.d.y * Lr, P.x, P.y, { color: gd, width: 1.4, dash: [6, 5], head: 8 });
@@ -464,18 +491,18 @@ function buildReflect(ctx) {
         if (g.si >= 0.03) {
           const aN = Math.atan2(nIn.y, nIn.x);
           const ai = angBetween(nIn, { x: -D.d.x, y: -D.d.y }), ar = angBetween(nIn, D.d2);
-          arcPx(cvA, P.x, P.y, 40, aN, aN + ai, { color: C.wave1 });
-          arcPx(cvA, P.x, P.y, 52, aN, aN + ar, { color: C.wave2 });
+          arcPx(cvA, P.x, P.y, 40 * SC, aN, aN + ai, { color: C.wave1 });
+          arcPx(cvA, P.x, P.y, 52 * SC, aN, aN + ar, { color: C.wave2 });
           const mid1 = rotv(nIn, ai / 2), mid2 = rotv(nIn, ar / 2);
-          cvA.textPx('i = ' + fmt(st.i, 0) + '°', cvA.px(P.x) + 56 * mid1.x, cvA.py(P.y) - 56 * mid1.y, { color: C.wave1, bold: true });
-          cvA.textPx('r = ' + fmt(st.i, 0) + '°', cvA.px(P.x) + 70 * mid2.x, cvA.py(P.y) - 70 * mid2.y, { color: C.wave2, bold: true });
+          cvA.textPx('i = ' + fmt(st.i, 0) + '°', cvA.px(P.x) + 56 * SC * mid1.x, cvA.py(P.y) - 56 * SC * mid1.y, { color: C.wave1, bold: true });
+          cvA.textPx('r = ' + fmt(st.i, 0) + '°', cvA.px(P.x) + 70 * SC * mid2.x, cvA.py(P.y) - 70 * SC * mid2.y, { color: C.wave2, bold: true });
         }
       }
     });
     // 壁
     const seg = clipLine(g.n.x, g.n.y, 0, rect);
-    if (seg) cvA.line(seg[0][0], seg[0][1], seg[1][0], seg[1][1], { color: '#8fd6b0', width: 3 });
-    cvA.textPx('壁', cvA.px(toW(g, 0, qLo).x), cvA.py(toW(g, 0, qLo).y), { dy: -14, dx: -6, align: 'right', color: '#8fd6b0', bold: true });
+    if (seg) cvA.line(seg[0][0], seg[0][1], seg[1][0], seg[1][1], { color: WALLC, width: 3 });
+    cvA.textPx('壁', cvA.px(toW(g, 0, qLo).x), cvA.py(toW(g, 0, qLo).y), { dy: -14 * SC, dx: -6, align: 'right', color: WALLC, bold: true });
     cvA.textPx('方眼 1目盛り = 1 m', cvA.pad.l + 6, cvA.pad.t + cvA.ih - 8, { align: 'left', color: C.muted, size: 11 });
     cvA.drawHandles();
   }
@@ -511,7 +538,7 @@ function buildReflect(ctx) {
     const V = cvB.view, rect = { x0: V.x0, x1: V.x1, y0: V.y0, y1: V.y1 };
     const corners = [[V.x0, V.y0], [V.x1, V.y0], [V.x1, V.y1], [V.x0, V.y1]];
     const poly = clipPoly(corners, g.n.x, g.n.y, 0);
-    if (poly.length >= 3) cvB.plotPts(poly, { close: true, fill: 'rgba(143,214,176,0.12)', color: 'none' });
+    if (poly.length >= 3) cvB.plotPts(poly, { close: true, fill: WALLFILL, color: 'none' });
     const W = (p, q) => toW(g, p, q);
     const Aw = W(0, 0), Bpw = W(0, L), Bw = W(B[0], B[1]), A2w = W(A2[0], A2[1]);
     // ピクセル方向（等方ビュー）— ラベルのずらし量を壁座標で指定する
@@ -521,7 +548,7 @@ function buildReflect(ctx) {
 
     // 壁
     const seg = clipLine(g.n.x, g.n.y, 0, rect);
-    if (seg) cvB.line(seg[0][0], seg[0][1], seg[1][0], seg[1][1], { color: '#8fd6b0', width: 3 });
+    if (seg) cvB.line(seg[0][0], seg[0][1], seg[1][0], seg[1][1], { color: WALLC, width: 3 });
 
     if (degen) {
       cvB.text('入射角 0°（垂直入射）', (V.x0 + V.x1) / 2, V.y0 + (V.y1 - V.y0) * 0.24, { color: C.muted, bold: true, size: 15 });
@@ -532,7 +559,7 @@ function buildReflect(ctx) {
         const aw = Math.atan2(g.w.y, g.w.x);
         for (let k = 0; k <= 6; k++) {
           const q = L * k / 6, R = F0.radius(q), P = W(0, q);
-          if (R > 0.004) cvB.circle(P.x, P.y, R, { color: hexA(C.guide, 0.6), width: 1.3, a0: aw, a1: aw + Math.PI });
+          if (R > 0.004) cvB.circle(P.x, P.y, R, { color: GA(0.6, 0.85), width: 1.3, a0: aw, a1: aw + Math.PI });
           cvB.dot(P.x, P.y, 3.2, { color: C.guide });
         }
       }
@@ -541,27 +568,27 @@ function buildReflect(ctx) {
       if (st.env) {
         const ex = 0.22 * L;
         cvB.line(Bpw.x, Bpw.y, A2w.x - D.u2.x * ex, A2w.y - D.u2.y * ex, { color: C.wave2, width: 3 });
-        const lm = lab(-6, -16), Ew = { x: A2w.x - D.u2.x * ex * 0.85, y: A2w.y - D.u2.y * ex * 0.85 };
-        cvB.text('反射波面', Ew.x, Ew.y, { dx: lm.dx, dy: lm.dy, align: 'right', color: C.wave2, bold: true });
+        const lm = lab(-6 * SC, -16 * SC), Ew = { x: A2w.x - D.u2.x * ex * 0.85, y: A2w.y - D.u2.y * ex * 0.85 };
+        if (!PROJ) cvB.text('反射波面', Ew.x, Ew.y, { dx: lm.dx, dy: lm.dy, align: 'right', color: C.wave2, bold: true });
       }
       // 長さ（BB′＝青・AA″＝赤・AB′＝灰破線）
       if (st.len) {
         cvB.line(Aw.x, Aw.y, Bpw.x, Bpw.y, { color: hexA(C.muted, .85), width: 1.5, dash: [6, 5] });
-        const lm0 = lab(12, 0);
-        cvB.text("AB′ = " + fmt(L, 2) + ' m', (Aw.x + Bpw.x) / 2, (Aw.y + Bpw.y) / 2, { dx: lm0.dx, dy: lm0.dy, color: C.muted });
+        const lm0 = lab(12 * SC, 0);
+        cvB.text(PROJ ? "AB′" : "AB′ = " + fmt(L, 2) + ' m', (Aw.x + Bpw.x) / 2, (Aw.y + Bpw.y) / 2, { dx: lm0.dx, dy: lm0.dy, color: C.muted, bold: PROJ });
         cvB.line(Bw.x, Bw.y, Bpw.x, Bpw.y, { color: C.wave1, width: 4.5, alpha: .95 });
-        const lm1 = lab(-8, 14);
-        cvB.text("BB′ = vΔt = " + fmt(F0.BB, 2) + ' m', (Bw.x + Bpw.x) / 2, (Bw.y + Bpw.y) / 2, { dx: lm1.dx, dy: lm1.dy, align: 'left', color: C.wave1, bold: true });
+        const lm1 = lab(-8 * SC, 14 * SC);
+        cvB.text(PROJ ? "BB′" : "BB′ = vΔt = " + fmt(F0.BB, 2) + ' m', (Bw.x + Bpw.x) / 2, (Bw.y + Bpw.y) / 2, { dx: lm1.dx, dy: lm1.dy, align: 'left', color: C.wave1, bold: true });
         cvB.line(Aw.x, Aw.y, A2w.x, A2w.y, { color: C.wave2, width: 4.5, alpha: .95 });
-        const lm2 = lab(-20, -6);
-        cvB.text('AA″ = vΔt = ' + fmt(F0.RA, 2) + ' m', Aw.x + (A2w.x - Aw.x) * 0.8, Aw.y + (A2w.y - Aw.y) * 0.8, { dx: lm2.dx, dy: lm2.dy, align: 'right', color: C.wave2, bold: true });
+        const lm2 = lab(PROJ ? -16 * SC : -20, PROJ ? -10 * SC : -6), q2 = PROJ ? 0.55 : 0.8;
+        cvB.text(PROJ ? 'AA″' : 'AA″ = vΔt = ' + fmt(F0.RA, 2) + ' m', Aw.x + (A2w.x - Aw.x) * q2, Aw.y + (A2w.y - Aw.y) * q2, { dx: lm2.dx, dy: lm2.dy, align: 'right', color: C.wave2, bold: true });
         rightAngle(cvB, Bw, Aw, Bpw);
         rightAngle(cvB, A2w, Aw, Bpw);
       }
       // 点と名前
       cvB.dot(Aw.x, Aw.y, 4.5, { color: C.text }); cvB.dot(Bw.x, Bw.y, 4.5, { color: C.wave1 });
       cvB.dot(Bpw.x, Bpw.y, 4.5, { color: C.wave1 }); cvB.dot(A2w.x, A2w.y, 4.5, { color: C.wave2 });
-      const la = lab(10, -12), lb = lab(-10, -10), lbp = lab(12, 10), la2 = lab(-12, -12);
+      const la = lab(10 * SC, -12 * SC), lb = lab(-10 * SC, -10 * SC), lbp = lab(12 * SC, 10 * SC), la2 = lab(-12 * SC, -12 * SC);
       cvB.text('A', Aw.x, Aw.y, { dx: la.dx, dy: la.dy, color: C.text, bold: true });
       cvB.text('B', Bw.x, Bw.y, { dx: lb.dx, dy: lb.dy, color: C.wave1, bold: true });
       cvB.text("B′", Bpw.x, Bpw.y, { dx: lbp.dx, dy: lbp.dy, color: C.wave1, bold: true });
@@ -574,11 +601,13 @@ function buildReflect(ctx) {
         cvB.arrow(Aw.x, Aw.y, Aw.x + D.d2.x * Lp, Aw.y + D.d2.y * Lp, { color: C.wave2, width: 2.5 });
         const aN = Math.atan2(nIn.y, nIn.x);
         const ai = angBetween(nIn, { x: -D.d.x, y: -D.d.y }), ar = angBetween(nIn, D.d2);
-        arcPx(cvB, Aw.x, Aw.y, 34, aN, aN + ai, { color: C.wave1 });
-        arcPx(cvB, Aw.x, Aw.y, 46, aN, aN + ar, { color: C.wave2 });
+        arcPx(cvB, Aw.x, Aw.y, 34 * SC, aN, aN + ai, { color: C.wave1 });
+        arcPx(cvB, Aw.x, Aw.y, 46 * SC, aN, aN + ar, { color: C.wave2 });
         const m1 = rotv(nIn, ai / 2), m2 = rotv(nIn, ar / 2);
-        cvB.textPx('i = ' + fmt(st.i, 0) + '°', cvB.px(Aw.x) + 50 * m1.x, cvB.py(Aw.y) - 50 * m1.y, { color: C.wave1, bold: true });
-        cvB.textPx('r = ' + fmt(st.i, 0) + '°', cvB.px(Aw.x) + 72 * m2.x, cvB.py(Aw.y) - 72 * m2.y, { color: C.wave2, bold: true });
+        if (!PROJ) {   // 投影: 文字が 1.6 倍になると A″ まわりで重なるので弧だけにする（角の値は左の画面と下の読み出しに出ている）
+          cvB.textPx('i = ' + fmt(st.i, 0) + '°', cvB.px(Aw.x) + 50 * m1.x, cvB.py(Aw.y) - 50 * m1.y, { color: C.wave1, bold: true });
+          cvB.textPx('r = ' + fmt(st.i, 0) + '°', cvB.px(Aw.x) + 72 * m2.x, cvB.py(Aw.y) - 72 * m2.y, { color: C.wave2, bold: true });
+        }
       }
     }
     cvB.axes({ grid: true, xStep: 1, yStep: 1, xAxis: false, yAxis: false, xTicks: false, yTicks: false });
@@ -612,9 +641,11 @@ function buildReflect(ctx) {
   function drawTank(dt, running) {
     tank.draw(dt, running);
     cvB.textPx('壁（変位 0）　入射角 i = ' + fmt(st.i, 0) + '°　壁の角度 ' + (Math.abs(st.wall) < 0.5 ? '垂直' : fmt(st.wall, 0) + '°'),
-      cvB.pad.l + 8, cvB.pad.t + 12, { align: 'left', color: C.text, size: 12 });
-    cvB.textPx('λ = ' + (TST / 2) + ' セル（1 m = ' + fmt(TST / 2 / st.lam, 1) + ' セル）　波源の周期 ' + TST + ' ステップ ＝ T = ' + fmt(st.T, 1) + ' s　格子 ' + tank.nx + '×' + tank.ny,
-      cvB.pad.l + 8, cvB.pad.t + 30, { align: 'left', color: C.muted, size: 12 });
+      cvB.pad.l + 8, cvB.pad.t + 12 * SC, { align: 'left', color: C.text, size: 12 });
+    cvB.textPx(PROJ
+      ? 'λ = ' + (TST / 2) + ' セル　T = ' + TST + ' ステップ ＝ ' + fmt(st.T, 1) + ' s'
+      : 'λ = ' + (TST / 2) + ' セル（1 m = ' + fmt(TST / 2 / st.lam, 1) + ' セル）　波源の周期 ' + TST + ' ステップ ＝ T = ' + fmt(st.T, 1) + ' s　格子 ' + tank.nx + '×' + tank.ny,
+      cvB.pad.l + 8, cvB.pad.t + 30 * SC, { align: 'left', color: C.muted, size: 12 });
   }
   function setTankMode(on) {
     st.tank = on;
@@ -734,8 +765,8 @@ function buildRefract(ctx) {
     const halfW = (tank.nx || 160) / (2 * cellsPerM());   // タンクと同じ横幅［m］
     cvA.setViewIso(0, 0, halfW);
     const V = cvA.view, g = geom();
-    fillRectPx(cvA, cvA.pad.l, cvA.py(V.y1), cvA.iw, cvA.py(0) - cvA.py(V.y1), 'rgba(105,183,255,0.055)');
-    fillRectPx(cvA, cvA.pad.l, cvA.py(0), cvA.iw, cvA.py(V.y0) - cvA.py(0), 'rgba(199,146,255,0.075)');
+    fillRectPx(cvA, cvA.pad.l, cvA.py(V.y1), cvA.iw, cvA.py(0) - cvA.py(V.y1), MED1BG);
+    fillRectPx(cvA, cvA.pad.l, cvA.py(0), cvA.iw, cvA.py(V.y0) - cvA.py(0), MED2BG);
 
     // 点の間隔: 波面が画面を横切る長さ（弦）を 15 等分 → どの入射角でも 1 列 15〜30 点になる
     const chord = Math.min((V.x1 - V.x0) / Math.max(g.ci, 0.05), (V.y1 - V.y0) / Math.max(g.si, 0.05));
@@ -796,7 +827,7 @@ function buildRefract(ctx) {
       }
       // 射線（点が通る道すじ）
       if (st.ray) {
-        const gd = hexA(C.guide, .75);
+        const gd = GA(.75, .9);
         for (let k = 1; k <= 5; k++) {
           const xc = V.x0 + (V.x1 - V.x0) * k / 6;
           const L1 = V.y1 / Math.max(g.ci, .05);
@@ -806,10 +837,10 @@ function buildRefract(ctx) {
       }
     });
 
-    cvA.line(V.x0, 0, V.x1, 0, { color: '#8fd6b0', width: 2.5 });
+    cvA.line(V.x0, 0, V.x1, 0, { color: WALLC, width: 2.5 });
     cvA.axes({ xLabel: 'x [m]', grid: false, xAxis: false, yAxis: false, xTicks: false, yTicks: false });
-    cvA.text('媒質1　v₁ = ' + fmt(g.v1, 2) + ' m/s　λ₁ = v₁T = ' + fmt(g.lam1, 2) + ' m', V.x0 + 0.02 * (V.x1 - V.x0), V.y1, { dy: 14, align: 'left', color: C.wave1, bold: true });
-    cvA.text('媒質2　v₂ = ' + fmt(g.v2, 2) + ' m/s' + (g.total ? '' : '　λ₂ = v₂T = ' + fmt(g.lam2, 2) + ' m'), V.x0 + 0.02 * (V.x1 - V.x0), V.y0, { dy: -12, align: 'left', color: C.dens, bold: true });
+    cvA.text('媒質1　v₁ = ' + fmt(g.v1, 2) + ' m/s　λ₁ = v₁T = ' + fmt(g.lam1, 2) + ' m', V.x0 + 0.02 * (V.x1 - V.x0), V.y1, { dy: 14 * SC, align: 'left', color: C.wave1, bold: true });
+    cvA.text('媒質2　v₂ = ' + fmt(g.v2, 2) + ' m/s' + (g.total ? '' : '　λ₂ = v₂T = ' + fmt(g.lam2, 2) + ' m'), V.x0 + 0.02 * (V.x1 - V.x0), V.y0, { dy: -12 * SC, align: 'left', color: C.dens, bold: true });
     if (g.total) cvA.text('屈折波なし（全反射）', 0, V.y0 * 0.5, { color: C.wave2, bold: true, size: 16 });
     if (g.si < 1e-3) cvA.text('入射角 0°：どの点も同時に境界に着くので列は曲がらない（間隔だけ λ₁ → λ₂ に変わる）', 0, V.y1 * 0.55, { color: C.muted, size: 13 });
   }
@@ -839,10 +870,12 @@ function buildRefract(ctx) {
     tank.draw(dt, running);
     const g = geom(), N = cellsPerM(), nx = tank.nx, ny = tank.ny;
     const yb = cvB.pad.t + cvB.ih * ((ny >> 1) / ny);
-    cvB.linePx(cvB.pad.l, yb, cvB.pad.l + cvB.iw, yb, { color: '#8fd6b0', width: 2 });
-    cvB.textPx('媒質1　λ₁ = ' + fmt(g.lam1, 2) + ' m = ' + fmt(N * g.lam1, 0) + ' セル', cvB.pad.l + 8, cvB.pad.t + 12, { align: 'left', color: C.wave1, bold: true, size: 12 });
-    cvB.textPx('媒質2　λ₂ = ' + fmt(g.lam2, 2) + ' m = ' + fmt(N * g.lam2, 0) + ' セル', cvB.pad.l + 8, yb + 14, { align: 'left', color: C.dens, bold: true, size: 12 });
-    cvB.textPx('1 m = ' + fmt(N, 1) + ' セル　波源の周期 ' + TstOf() + ' ステップ ＝ T = ' + fmt(st.T, 1) + ' s　格子 ' + nx + '×' + ny,
+    cvB.linePx(cvB.pad.l, yb, cvB.pad.l + cvB.iw, yb, { color: WALLC, width: 2 });
+    cvB.textPx('媒質1　λ₁ = ' + fmt(g.lam1, 2) + ' m = ' + fmt(N * g.lam1, 0) + ' セル', cvB.pad.l + 8, cvB.pad.t + 12 * SC, { align: 'left', color: C.wave1, bold: true, size: 12 });
+    cvB.textPx('媒質2　λ₂ = ' + fmt(g.lam2, 2) + ' m = ' + fmt(N * g.lam2, 0) + ' セル', cvB.pad.l + 8, yb + 14 * SC, { align: 'left', color: C.dens, bold: true, size: 12 });
+    // 投影では文字が大きく、上の λ₁ ラベルと重なるので、短くして下の余白に置く
+    if (PROJ) cvB.textPx('1 m = ' + fmt(N, 1) + ' セル　格子 ' + nx + '×' + ny, cvB.pad.l + cvB.iw - 8, cvB.pad.t + cvB.ih - 12 * SC, { align: 'right', color: C.muted, size: 12 });
+    else cvB.textPx('1 m = ' + fmt(N, 1) + ' セル　波源の周期 ' + TstOf() + ' ステップ ＝ T = ' + fmt(st.T, 1) + ' s　格子 ' + nx + '×' + ny,
       cvB.pad.l + cvB.iw - 8, cvB.pad.t + (cvB.iw < 420 ? 30 : 12), { align: 'right', color: C.muted, size: 12 });
   }
 
@@ -944,8 +977,8 @@ function buildRefract2(ctx) {
       G.hlen = Math.min(V.y1 * 0.9, D * 0.75);
 
       // 媒質の背景
-      fillRectPx(cv, cv.pad.l, cv.py(V.y1), cv.iw, cv.py(0) - cv.py(V.y1), 'rgba(105,183,255,0.055)');
-      fillRectPx(cv, cv.pad.l, cv.py(0), cv.iw, cv.py(V.y0) - cv.py(0), 'rgba(199,146,255,0.075)');
+      fillRectPx(cv, cv.pad.l, cv.py(V.y1), cv.iw, cv.py(0) - cv.py(V.y1), MED1BG);
+      fillRectPx(cv, cv.pad.l, cv.py(0), cv.iw, cv.py(V.y0) - cv.py(0), MED2BG);
 
       const i = st.i * D2R, si = Math.sin(i), ci = Math.cos(i);
       const v1 = st.v1, v2 = st.v2, T = st.T, lam1 = v1 * T, lam2 = v2 * T;
@@ -965,8 +998,8 @@ function buildRefract2(ctx) {
       }
 
       // 境界
-      cv.line(V.x0, 0, V.x1, 0, { color: '#8fd6b0', width: 2.5 });
-      cv.text('媒質1　v₁ = ' + fmt(v1, 2) + ' m/s　λ₁ = ' + fmt(lam1, 2) + ' m', V.x0 + 0.15, V.y1, { dy: 14, align: 'left', color: C.wave1, bold: true });
+      cv.line(V.x0, 0, V.x1, 0, { color: WALLC, width: 2.5 });
+      cv.text('媒質1　v₁ = ' + fmt(v1, 2) + ' m/s　λ₁ = ' + fmt(lam1, 2) + ' m', V.x0 + 0.15, V.y1, { dy: 14 * SC, align: 'left', color: C.wave1, bold: true });
       cv.text('媒質2　v₂ = ' + fmt(v2, 2) + ' m/s' + (total ? '' : '　λ₂ = ' + fmt(lam2, 2) + ' m'), V.x0 + 0.15, V.y0 * 0.62, { align: 'left', color: C.dens, bold: true });
 
       // 作図の途中量: 入射波面の端 B が境界の B′ に着くまでの時間 Δt と、その間の BB′・AT
@@ -981,35 +1014,37 @@ function buildRefract2(ctx) {
           const n = st.n | 0;
           for (let k = 0; k < n; k++) {
             const s = D * k / (n - 1), P = { x: A.x + s, y: 0 }, R = Math.sin(rr) * (D - s);
-            if (R > 0.004) cv.circle(P.x, P.y, R, { color: hexA(C.guide, 0.55), width: 1.2, a0: 0, a1: Math.PI });
+            if (R > 0.004) cv.circle(P.x, P.y, R, { color: GA(0.55, 0.8), width: 1.2, a0: 0, a1: Math.PI });
             cv.dot(P.x, 0, 3.5, { color: C.guide });
           }
         }
         // 入射波面（A→B、およびB'を通る位置）
         cv.line(A.x, A.y, B.x, B.y, { color: C.wave1, width: 3 });
-        cv.text('A', A.x, A.y, { dy: 14, dx: -10, color: C.text, bold: true });
-        cv.text('B', B.x, B.y, { dy: -12, color: C.wave1, bold: true });
+        cv.text('A', A.x, A.y, { dy: 14 * SC, dx: -10 * SC, color: C.text, bold: true });
+        cv.text('B', B.x, B.y, { dy: -12 * SC, color: C.wave1, bold: true });
         const segB = clipLine(u1.y, -u1.x, u1.y * Bp.x - u1.x * Bp.y, { x0: V.x0, x1: V.x1, y0: 0, y1: V.y1 });
         if (segB) cv.line(segB[0][0], segB[0][1], segB[1][0], segB[1][1], { color: C.wave1, width: 2, dash: [8, 6], alpha: .85 });
-        cv.dot(Bp.x, 0, 4.5, { color: C.wave1 }); cv.text("B'", Bp.x, 0, { dy: 14, dx: 10, color: C.wave1, bold: true });
+        cv.dot(Bp.x, 0, 4.5, { color: C.wave1 }); cv.text("B'", Bp.x, 0, { dy: 14 * SC, dx: 10 * SC, color: C.wave1, bold: true });
         // 屈折波面（包絡線）— T は素元波（半径 AT）との接点
         const Tp = total ? null : { x: Bp.x - u2.x * D * Math.cos(rr), y: Bp.y - u2.y * D * Math.cos(rr) };
         if (st.env && Tp) {
           cv.line(Bp.x, Bp.y, Tp.x, Tp.y, { color: C.wave, width: 3 });
-          cv.text('屈折波面', (Bp.x + Tp.x) / 2, (Bp.y + Tp.y) / 2, { dy: 14, dx: 18, color: C.wave, bold: true });
+          cv.text('屈折波面', (Bp.x + Tp.x) / 2, (Bp.y + Tp.y) / 2, { dy: 14 * SC, dx: 18 * SC, color: C.wave, bold: true });
         }
         // 作図の途中量（長さ）: AB′（共通の斜辺）・BB′ = v₁Δt（青）・AT = v₂Δt（緑）
         if (st.len) {
           cv.line(A.x, A.y, Bp.x, Bp.y, { color: hexA(C.muted, .8), width: 1.5, dash: [6, 5] });
-          cv.text("AB′ = " + fmt(D, 2) + ' m', (A.x + Bp.x) / 2, 0, { dy: -11, color: C.muted });
+          cv.text(PROJ ? "AB′" : "AB′ = " + fmt(D, 2) + ' m', (A.x + Bp.x) / 2, 0, { dy: -11 * SC, color: C.muted, bold: PROJ });
           cv.line(B.x, B.y, Bp.x, Bp.y, { color: C.wave1, width: 4.5, alpha: .95 });
-          cv.text("BB′ = v₁Δt = " + fmt(BBp, 2) + ' m', (B.x + Bp.x) / 2, (B.y + Bp.y) / 2, { dx: 9, dy: -6, align: 'left', color: C.wave1, bold: true });
+          cv.text(PROJ ? "BB′" : "BB′ = v₁Δt = " + fmt(BBp, 2) + ' m', (B.x + Bp.x) / 2, (B.y + Bp.y) / 2, { dx: 9 * SC, dy: -6 * SC, align: 'left', color: C.wave1, bold: true });
           if (Tp) {
             cv.line(A.x, A.y, Tp.x, Tp.y, { color: C.wave, width: 4.5, alpha: .95 });
             cv.dot(Tp.x, Tp.y, 4.5, { color: C.wave });
-            cv.text('T', Tp.x, Tp.y, { dx: -13, dy: 9, color: C.wave, bold: true });
-            // 角 r の円弧（A まわり 44px）を避けて、T 寄りにラベルを置く
-            cv.text('AT = v₂Δt = ' + fmt(AT, 2) + ' m', A.x + (Tp.x - A.x) * 0.9, A.y + (Tp.y - A.y) * 0.9, { dx: -12, dy: 16, align: 'right', color: C.wave, bold: true });
+            // 投影では角 r のラベルが T の左下に来るので、点名 T は右下に置く
+            cv.text('T', Tp.x, Tp.y, PROJ ? { dx: 13 * SC, dy: 12 * SC, align: 'left', color: C.wave, bold: true } : { dx: -13, dy: 9, color: C.wave, bold: true });
+            // 角 r の円弧（A まわり 44px）を避けて、T 寄りにラベルを置く。投影では記号だけ（数値は下の読み出しに出る）
+            const qT = PROJ ? 1.2 : 0.9;
+            cv.text(PROJ ? 'AT' : 'AT = v₂Δt = ' + fmt(AT, 2) + ' m', A.x + (Tp.x - A.x) * qT, A.y + (Tp.y - A.y) * qT, { dx: PROJ ? -6 * SC : -12, dy: PROJ ? 14 * SC : 16, align: 'right', color: C.wave, bold: true });
           }
         }
         // 射線・法線・角
@@ -1017,13 +1052,13 @@ function buildRefract2(ctx) {
           cv.line(A.x, V.y1 * 0.95, A.x, V.y0 * 0.95, { color: C.muted, width: 1.4, dash: [6, 6], alpha: .8 });
           const Lin = Math.min(V.y1 * 0.85 / Math.max(ci, 0.2), 2.4);
           cv.arrow(A.x - d1.x * Lin, A.y - d1.y * Lin, A.x, A.y, { color: C.wave1, width: 2.5 });
-          arcPx(cv, A.x, A.y, 44, Math.PI / 2, Math.PI / 2 + i, { color: C.wave1 });
-          cv.textPx('i = ' + fmt(st.i, 0) + '°', cv.px(A.x) + 58 * Math.cos(-(Math.PI / 2 + i / 2)), cv.py(A.y) + 58 * Math.sin(-(Math.PI / 2 + i / 2)), { color: C.wave1, bold: true });
+          arcPx(cv, A.x, A.y, 44 * SC, Math.PI / 2, Math.PI / 2 + i, { color: C.wave1 });
+          cv.textPx('i = ' + fmt(st.i, 0) + '°', cv.px(A.x) + 58 * SC * Math.cos(-(Math.PI / 2 + i / 2)), cv.py(A.y) + 58 * SC * Math.sin(-(Math.PI / 2 + i / 2)), { color: C.wave1, bold: true });
           if (!total) {
             const Lr = Math.min(-V.y0 * 0.85 / Math.max(Math.cos(rr), 0.2), 2.4);
             cv.arrow(A.x, A.y, A.x + d2.x * Lr, A.y + d2.y * Lr, { color: C.wave, width: 2.5 });
-            arcPx(cv, A.x, A.y, 44, -Math.PI / 2, -Math.PI / 2 + rr, { color: C.wave });
-            cv.textPx('r = ' + fmt(rr * R2D, 1) + '°', cv.px(A.x) + 58 * Math.cos(Math.PI / 2 - rr / 2), cv.py(A.y) + 58 * Math.sin(Math.PI / 2 - rr / 2), { color: C.wave, bold: true });
+            arcPx(cv, A.x, A.y, 44 * SC, -Math.PI / 2, -Math.PI / 2 + rr, { color: C.wave });
+            cv.textPx('r = ' + fmt(rr * R2D, 1) + '°', cv.px(A.x) + 58 * SC * Math.cos(Math.PI / 2 - rr / 2), cv.py(A.y) + 58 * SC * Math.sin(Math.PI / 2 - rr / 2), { color: C.wave, bold: true });
           }
         }
         if (total) cv.text('屈折波なし（全反射）', (A.x + Bp.x) / 2, V.y0 * 0.55, { color: C.wave2, bold: true, size: 17 });
@@ -1156,10 +1191,11 @@ function buildDiffract(ctx) {
     const d = img.data, g = st.gain;
     for (let k = 0, n = nx * ny; k < n; k++) {
       const o = 4 * k;
-      if (wall[k]) { d[o] = 124; d[o + 1] = 134; d[o + 2] = 128; continue; }
+      if (wall[k]) { d[o] = BAR_RGB[0]; d[o + 1] = BAR_RGB[1]; d[o + 2] = BAR_RGB[2]; continue; }
       let v = u[k] * g; if (v > 1) v = 1; else if (v < -1) v = -1;
-      const m = Math.pow(Math.abs(v), 0.75);
-      if (v >= 0) { d[o] = 84 * m; d[o + 1] = 255 * m; d[o + 2] = 138 * m; }
+      const m = Math.pow(Math.abs(v), PROJ ? 1 : 0.75);
+      if (PROJ) putShade(d, o, v >= 0 ? m : -m);
+      else if (v >= 0) { d[o] = 84 * m; d[o + 1] = 255 * m; d[o + 2] = 138 * m; }
       else { d[o] = 60 * m; d[o + 1] = 130 * m; d[o + 2] = 255 * m; }
     }
     offg.putImageData(img, 0, 0);
@@ -1184,14 +1220,14 @@ function buildDiffract(ctx) {
       const cell = cv.iw / nx, lam = lamOf();
       cv.textPx('v = ' + fmt(st.v, 2) + ' セル/ステップ　　T = ' + (st.Tst | 0) + ' ステップ（f = 1/T = ' + fmt(1 / st.Tst, 3) + ' /ステップ）'
         + '　　λ = vT = ' + fmt(st.v, 2) + ' × ' + (st.Tst | 0) + ' = ' + fmt(lam, 1) + ' セル',
-        cv.pad.l + 8, cv.pad.t + 12, { align: 'left', color: C.text, size: 12 });
+        cv.pad.l + 8, cv.pad.t + 12 * SC, { align: 'left', color: C.text, size: 12 });
       cv.textPx('スリット幅 w = ' + (st.w | 0) + ' セル　→　w/λ = ' + fmt(st.w / lam, 2) + '　（格子 ' + nx + '×' + ny + '）',
-        cv.pad.l + 8, cv.pad.t + 30, { align: 'left', color: C.muted, size: 12 });
+        cv.pad.l + 8, cv.pad.t + 30 * SC, { align: 'left', color: C.muted, size: 12 });
       // λ 目盛り
-      const x0 = cv.pad.l + cv.iw - 12 - lam * cell, yb = cv.pad.t + cv.ih - 14;
-      g.save(); g.strokeStyle = C.yellow; g.lineWidth = 2; g.beginPath();
-      g.moveTo(x0, yb - 5); g.lineTo(x0, yb); g.lineTo(x0 + lam * cell, yb); g.lineTo(x0 + lam * cell, yb - 5); g.stroke(); g.restore();
-      cv.textPx(lam * cell > 58 ? 'λ = vT' : 'λ', x0 + lam * cell / 2, yb - 12, { color: C.yellow, bold: true, size: 12 });
+      const x0 = cv.pad.l + cv.iw - 12 - lam * cell, yb = cv.pad.t + cv.ih - 14 * SC;
+      g.save(); g.strokeStyle = C.yellow; g.lineWidth = 2 * SC; g.beginPath();
+      g.moveTo(x0, yb - 5 * SC); g.lineTo(x0, yb); g.lineTo(x0 + lam * cell, yb); g.lineTo(x0 + lam * cell, yb - 5 * SC); g.stroke(); g.restore();
+      cv.textPx(lam * cell > 58 * SC ? 'λ = vT' : 'λ', x0 + lam * cell / 2, yb - 12 * SC, { color: C.yellow, bold: true, size: 12 });
       sSep.box.style.display = st.preset === 'double' ? '' : 'none';
       DBG.probe = () => { // 検証用: 障壁の前後・軸外の振幅（rms）
         const bx = Math.round(nx * BXR), box = (i0, i1, j0, j1) => {
@@ -1241,7 +1277,7 @@ function buildInterfere(ctx) {
   ui.slider(ctx.controls, { label: 'T', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
   const F = ui.formula(ctx.controls, '');
   ui.legend(ctx.controls, [[C.anti, '水色の実線＝経路差 mλ の点'], [C.yellow, '黄の破線＝経路差 (m+½)λ の点']]);
-  note(ctx.controls, '<b>実線同士／破線同士の交点は、山と山・谷と谷が同時に来る点</b>（経路差 = mλ）。<b>実線と破線の交点は、一方の山ともう一方の谷が同時に来る点</b>（経路差 = (m+½)λ）。前者は右の y-t グラフで振幅 2A の大きな振動になり、後者はほとんど動かない。色は定在波タブと同じ意味で、<b style="color:#4dd0e1">水色＝大きく動く</b>・<b style="color:#ffd166">黄＝ほとんど動かない</b>。');
+  note(ctx.controls, '<b>実線同士／破線同士の交点は、山と山・谷と谷が同時に来る点</b>（経路差 = mλ）。<b>実線と破線の交点は、一方の山ともう一方の谷が同時に来る点</b>（経路差 = (m+½)λ）。前者は右の y-t グラフで振幅 2A の大きな振動になり、後者はほとんど動かない。色は定在波タブと同じ意味で、<b style="color:var(--cyan)">水色＝大きく動く</b>・<b style="color:var(--yellow)">黄＝ほとんど動かない</b>。');
   note(ctx.controls, '<b>逆位相</b>にすると、S₂ は S₁ が山を出す瞬間に谷を出す。そのため経路差 0 の点でも山と谷が重なり、2本の線の役割が入れかわる。');
   ui.slider(ctx.detail, { label: '明るさ', min: 0.5, max: 2.5, step: 0.1, value: 1, digits: 1, onInput: v => st.gain = v });
   note(ctx.detail, 'y(x,y,t) = A sin2π(t/T − r₁/λ) + A sin(2π(t/T − r₂/λ) + φ) を各点で計算して濃淡で表示（振幅の減衰は考えない）。右の y-t グラフはこの式に P の座標を入れ、時刻 t の関数として描いたもの。だから P をドラッグすると波形がその場で描き直される。');
@@ -1278,8 +1314,9 @@ function buildInterfere(ctx) {
           const r1 = Math.sqrt(a * a + q1), r2 = Math.sqrt(b * b + q2);
           let v = (sinT(ph - r1 / lam) + sinT(ph - r2 / lam + phi)) * 0.5 * gain;
           if (v > 1) v = 1; else if (v < -1) v = -1;
-          const m = Math.pow(Math.abs(v), 1.25), o = 4 * (j * W + i2);
-          if (v >= 0) { dd[o] = 84 * m; dd[o + 1] = 255 * m; dd[o + 2] = 138 * m; }
+          const m = Math.pow(Math.abs(v), PROJ ? 1.1 : 1.25), o = 4 * (j * W + i2);
+          if (PROJ) putShade(dd, o, v >= 0 ? m : -m);
+          else if (v >= 0) { dd[o] = 84 * m; dd[o + 1] = 255 * m; dd[o + 2] = 138 * m; }
           else { dd[o] = 60 * m; dd[o + 1] = 130 * m; dd[o + 2] = 255 * m; }
         }
       }
@@ -1297,7 +1334,7 @@ function buildInterfere(ctx) {
           for (let n = -2; n * lam + base < rmax; n++) {
             const rc = base + n * lam; if (rc <= 0.02) continue;
             cv.circle(S.x, S.y, rc, { color: hexA(C.text, .9), width: 1.6 });
-            const rt = rc + lam / 2; if (rt < rmax) cv.circle(S.x, S.y, rt, { color: hexA(C.text, .55), width: 1.4, dash: [6, 5] });
+            const rt = rc + lam / 2; if (rt < rmax) cv.circle(S.x, S.y, rt, { color: hexA(C.text, PROJ ? .75 : .55), width: 1.4, dash: [6, 5] });
           }
         }
       }
@@ -1333,14 +1370,14 @@ function buildInterfere(ctx) {
       }
 
       // --- 波源・P ---
-      cv.dot(S1.x, S1.y, 7, { color: C.wave2, stroke: '#000', width: 2 });
-      cv.dot(S2.x, S2.y, 7, { color: C.wave2, stroke: '#000', width: 2 });
-      cv.text('S₁', S1.x, S1.y, { dy: -18, color: C.wave2, bold: true, size: 15 });
-      cv.text('S₂', S2.x, S2.y, { dy: -18, color: C.wave2, bold: true, size: 15 });
+      cv.dot(S1.x, S1.y, 7, { color: C.wave2, stroke: PROJ ? '#fff' : '#000', width: 2 });
+      cv.dot(S2.x, S2.y, 7, { color: C.wave2, stroke: PROJ ? '#fff' : '#000', width: 2 });
+      cv.text('S₁', S1.x, S1.y, { dy: -18 * SC, color: C.wave2, bold: true, size: 15 });
+      cv.text('S₂', S2.x, S2.y, { dy: -18 * SC, color: C.wave2, bold: true, size: 15 });
       cv.hbracket(S1.x, S2.x, V.y0 + (V.y1 - V.y0) * 0.09, 'd = ' + fmt(d, 1) + ' m', { below: true });
       // S₁P・S₂P は作図補助線（灰）— 黄・水色は干渉の線の色なので使わない
-      cv.line(S1.x, S1.y, P.x, P.y, { color: hexA(C.guide, .8), width: 1.4, dash: [5, 5] });
-      cv.line(S2.x, S2.y, P.x, P.y, { color: hexA(C.guide, .8), width: 1.4, dash: [5, 5] });
+      cv.line(S1.x, S1.y, P.x, P.y, { color: GA(.8, .95), width: 1.4, dash: [5, 5] });
+      cv.line(S2.x, S2.y, P.x, P.y, { color: GA(.8, .95), width: 1.4, dash: [5, 5] });
       cv.drawHandles();
 
       // --- 読み出し ---
@@ -1360,8 +1397,10 @@ function buildInterfere(ctx) {
       Nami.recorder(cvP, { t, span: 3 * T, A: 2, y: yP, color: C.wave, xStep: T, yStep: 1 });
       const VP = cvP.view;
       for (const s of [1, -1]) {
-        cvP.line(VP.x0, 2 * s, VP.x1, 2 * s, { color: hexA(C.muted, .5), width: 1, dash: [5, 5] });
-        cvP.text((s > 0 ? '+' : '−') + '2A', VP.x0, 2 * s, { dx: 16, color: C.muted, size: 12 });
+        cvP.line(VP.x0, 2 * s, VP.x1, 2 * s, { color: hexA(C.muted, PROJ ? .75 : .5), width: 1, dash: [5, 5] });
+        // 投影では文字が大きく、左端の y 軸ラベルと重なるので右端に出す
+        if (PROJ) cvP.text((s > 0 ? '+' : '−') + '2A', VP.x1, 2 * s, { dx: -8, align: 'right', color: C.muted, size: 12 });
+        else cvP.text((s > 0 ? '+' : '−') + '2A', VP.x0, 2 * s, { dx: 16, color: C.muted, size: 12 });
       }
     },
     period: () => st.T
