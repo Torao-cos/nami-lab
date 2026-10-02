@@ -108,7 +108,8 @@ function check(name, ok, detail = '') {
   await page.goto(url('#ltgraph'));
   await page.waitForTimeout(1200);
   check('#ltgraph で「8 縦波の横波表示」タブが有効', await page.textContent('nav.tabs button.active') === '8 縦波の横波表示');
-  check('4段（キャンバス4枚）', await page.locator('.view.show .panel canvas').count() === 4);
+  check('3段（キャンバス3枚・④疎密グラフは削除）', await page.locator('.view.show .panel canvas').count() === 3);
+  check('疎密の式（Δρ ∝ −∂ξ/∂x）の説明は「詳しく」に残っている', (s => s.includes('Δρ ∝ −∂ξ/∂x'))((await page.locator('.view.show .controls.detail .note').allTextContents()).join(' ')));
 
   // 疎密ラベル位置 ⇔ ∂ξ/∂x の極値
   const lab = await page.evaluate(() => {
@@ -256,15 +257,15 @@ function check(name, ok, detail = '') {
   check('「地震発生からの時間」の表現になっている', /地震発生からの時間/.test(seisTxt) && !/地震の時刻/.test(seisTxt));
   check('再生速度が「画面の1秒＝実際の○秒」で説明されている', /再生速度/.test(seisTxt) && /画面の1秒＝実際の60秒/.test(seisTxt));
 
-  // --- 表示チェックが6つ独立している ---
+  // --- 表示チェックが8つ独立している（P/S × 射線・波面・影 ＋ ラベル・地震計） ---
   const togLabels = await page.locator('.view.show .controls:not(.detail) label').allTextContents();
-  const want = ['P波の射線', 'P波の波面', 'S波の射線', 'S波の波面', 'P波の影', 'S波の影'];
-  check('表示チェックが6つ（P/S × 射線・波面・影）', want.every(w => togLabels.some(l => l.replace(/\s/g, '').includes(w))),
+  const want = ['P波の射線', 'P波の波面', 'S波の射線', 'S波の波面', 'P波の影', 'S波の影', 'ラベル', '地震計'];
+  check('表示チェックが8つ（P/S × 射線・波面・影 ＋ ラベル・地震計）', want.every(w => togLabels.some(l => l.replace(/\s/g, '').includes(w))),
     JSON.stringify(togLabels.map(s => s.trim())));
-  // 6つを1つずつ外して、他に影響しないこと（独立に効く）
+  // 8つを1つずつ外して、他に影響しないこと（独立に効く）
   const boxes = page.locator('.view.show .controls:not(.detail) input[type=checkbox]');
-  check('チェックボックスがちょうど6つ', await boxes.count() === 6, `${await boxes.count()} 個`);
-  for (let i = 0; i < 6; i++) {
+  check('チェックボックスがちょうど8つ', await boxes.count() === 8, `${await boxes.count()} 個`);
+  for (let i = 0; i < 8; i++) {
     await boxes.nth(i).uncheck();
     const st = await page.evaluate(() => [...document.querySelectorAll('.view.show .controls:not(.detail) input[type=checkbox]')].map(c => c.checked));
     const ok = st.filter(v => !v).length === 1 && st[i] === false;
@@ -382,6 +383,38 @@ function check(name, ok, detail = '') {
   const dAfter = (await page.locator('.view.show .controls .readout').nth(1).textContent()).match(/[\d.]+/)[0];
   check('観測点のドラッグが生きている（Δ が変わる）', Math.abs(parseFloat(dAfter) - parseFloat(dBefore)) > 5, `${dBefore}° → ${dAfter}°`);
   await page.screenshot({ path: path.join(outDir, 'long-seismic-boxmoved-1280.png'), fullPage: true });
+
+  // --- 表示チェック「ラベル」「地震計」（既定 ON・OFF でも観測点のドラッグと読み出しは生きる） ---
+  const togg = name => page.locator('.view.show .controls:not(.detail) label').filter({ hasText: new RegExp('^\\s*' + name + '$') });
+  const darkRow = () => page.evaluate(() => {   // 左下に置いた小窓の暗い画素の数
+    const c = document.querySelector('.view.show canvas'), g = c.getContext('2d');
+    const d = g.getImageData(0, Math.round(c.height * 0.72), c.width, 1).data;
+    let n = 0; for (let x = 0; x < c.width; x++) { const i = x * 4; if (d[i] < 14 && d[i + 1] < 22 && d[i + 2] < 18 && d[i + 3] > 200) n++; }
+    return n;
+  });
+  const fl0 = await page.evaluate(() => ({ l: window.__nami_debug.seis.showLabels, s: window.__nami_debug.seis.showSeismo }));
+  check('「ラベル」「地震計」のチェックがあり既定 ON', (await togg('ラベル').count()) === 1 && (await togg('地震計').count()) === 1 && fl0.l && fl0.s, JSON.stringify(fl0));
+  await page.click('.view.show .timebar button');   // 止めてから見比べる
+  await page.waitForTimeout(300);
+  const lab0 = await cvEl.screenshot();
+  await togg('ラベル').click(); await page.waitForTimeout(300);
+  const lab1 = await cvEl.screenshot();
+  const box0 = await darkRow();
+  await togg('地震計').click(); await page.waitForTimeout(300);
+  const box1 = await darkRow();
+  const fl1 = await page.evaluate(() => ({ l: window.__nami_debug.seis.showLabels, s: window.__nami_debug.seis.showSeismo }));
+  check('「ラベル」OFF で層ラベル・角度の数字が消える（絵が変わる）', !fl1.l && Buffer.compare(lab0, lab1) !== 0);
+  check('「地震計」OFF で小窓が消える（小窓の暗い地の画素が減る。残りは地球の外の背景）', !fl1.s && box0 - box1 > 60, `暗い画素 ${box0} → ${box1}`);
+  await page.screenshot({ path: path.join(outDir, 'long-seismic-nolabel-noseismo-1280.png'), fullPage: true });
+  const dB2 = (await page.locator('.view.show .controls .readout').nth(1).textContent()).match(/[\d.]+/)[0];
+  await page.mouse.move(grab.cx + grab.R * Math.sin(2.1), grab.cy - grab.R * Math.cos(2.1));
+  await page.mouse.down();
+  await page.mouse.move(grab.x, grab.y, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  const dA2 = (await page.locator('.view.show .controls .readout').nth(1).textContent()).match(/[\d.]+/)[0];
+  check('「地震計」OFF でも観測点のドラッグと読み出しは生きる', Math.abs(parseFloat(dA2) - parseFloat(dB2)) > 5, `${dB2}° → ${dA2}°`);
+  await togg('ラベル').click(); await togg('地震計').click();   // 元に戻す
 
   await page.close();
 
