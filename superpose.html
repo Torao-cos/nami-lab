@@ -446,13 +446,15 @@ function buildStanding(ctx) {
   const h1 = ui.group(g1, '波1（右へ）'); h1.firstChild.className = 'ctlLabel hdr'; h1.firstChild.style.color = C.wave1;
   const v1 = ui.slider(g1, { label: '速さ v₁', min: 0.2, max: 3.0, step: 0.05, value: 1.0, unit: 'm/s', digits: 2 });
   const a1 = ui.slider(g1, { label: '振幅 A₁', min: 0.0, max: 2.0, step: 0.05, value: 1.0, unit: 'm', digits: 2 });
-  const f1 = ui.slider(g1, { label: '振動数 f₁', min: 0.1, max: 1.5, step: 0.05, value: 0.5, unit: 'Hz', digits: 2 });
+  const L1 = ui.slider(g1, { label: '波長 λ₁', min: 0.5, max: 4.0, step: 0.1, value: 2.0, unit: 'm', digits: 1 });
+  const f1 = { get: () => v1.get() / L1.get() };   // 振動数は導出量（f = v/λ）
   ui.sep(g1);
   const h2 = ui.group(g1, '波2（左へ）'); h2.firstChild.className = 'ctlLabel hdr'; h2.firstChild.style.color = C.wave2;
   const v2 = ui.slider(g1, { label: '速さ v₂', min: 0.2, max: 3.0, step: 0.05, value: 1.0, unit: 'm/s', digits: 2 });
   const a2 = ui.slider(g1, { label: '振幅 A₂', min: 0.0, max: 2.0, step: 0.05, value: 1.0, unit: 'm', digits: 2 });
-  const f2 = ui.slider(g1, { label: '振動数 f₂', min: 0.1, max: 1.5, step: 0.05, value: 0.5, unit: 'Hz', digits: 2 });
-  ui.buttons(g1, null, [{ label: '波2を波1にそろえる', onClick: () => { v2.set(v1.get()); a2.set(a1.get()); f2.set(f1.get()); } }]);
+  const L2 = ui.slider(g1, { label: '波長 λ₂', min: 0.5, max: 4.0, step: 0.1, value: 2.0, unit: 'm', digits: 1 });
+  const f2 = { get: () => v2.get() / L2.get() };
+  ui.buttons(g1, null, [{ label: '波2を波1にそろえる', onClick: () => { v2.set(v1.get()); a2.set(a1.get()); L2.set(L1.get()); } }]);
   ui.sep(g1);
   const t1 = ui.toggle(g1, { label: '波1', checked: true });
   const t2 = ui.toggle(g1, { label: '波2', checked: true });
@@ -461,7 +463,7 @@ function buildStanding(ctx) {
   const tM = ui.toggle(g1, { label: '節・腹', checked: true });
   const roN = ui.readout(g1, { label: '節の変位', value: '—' });
   const roL = ui.readout(g1, { label: '状態', value: '—' });
-  ui.note(g1, '速さの注意：同じ媒質では波の速さは等しい（v₁ = v₂）。ここでの速さの違いはシミュレーション上の仮想操作です。速さ・振幅・振動数の3つがそろったときだけ定在波になります。');
+  ui.note(g1, '速さの注意：同じ媒質では波の速さは等しい（v₁ = v₂）。ここでの速さの違いはシミュレーション上の仮想操作です。速さ・振幅・波長の3つがそろったときだけ定在波になります（振動数 f = v/λ は自動的に一致）。');
   ui.formula(ctx.detail, '教材1の位相：y₁ + y₂ = A sin2π(t/T − x/λ) + A sin2π(t/T + x/λ) = <b>2A sin(2πt/T) · cos(2πx/λ)</b>　（和積の公式）');
   ui.note(ctx.detail, '時間の部分 sin(2πt/T) と場所の部分 cos(2πx/λ) が分かれる＝波形は左右に進まず、各点が「その場所ごとの振幅 2A cos(2πx/λ)」で単振動する。cos(2πx/λ) = 0 になる場所が節（動かない）、|cos(2πx/λ)| = 1 になる場所が腹（最大 2A で動く）。3量のどれかがずれるとこの形に因数分解できず、節が止まらない／模様が流れる。');
 
@@ -497,8 +499,8 @@ function buildStanding(ctx) {
     matched,
     lambda: () => lamOf(v1.get(), f1.get()),
     nodes: () => { const lam = lamOf(v1.get(), f1.get()), out = []; for (let x = lam / 4; x <= V.x1; x += lam / 2) out.push(x); return out; },
-    setA2: v => a2.set(v), setV2: v => v2.set(v), setF2: v => f2.set(v),
-    align: () => { v2.set(v1.get()); a2.set(a1.get()); f2.set(f1.get()); },
+    setA2: v => a2.set(v), setV2: v => v2.set(v), setL2: v => L2.set(v), setF2: v => L2.set(v2.get() / v),
+    align: () => { v2.set(v1.get()); a2.set(a1.get()); L2.set(L1.get()); },
     mode: v => mode.set(v),
     setEnd: v => endSel.set(v),
     ySum2: (x, t) => Ys2(x, t), yi2: (x, t) => Yi2(x, t), wallL: L,
@@ -550,7 +552,7 @@ function buildStanding(ctx) {
       const xn = lam / 4, yn = Y1(xn, t) + Y2(xn, t);
       roN.set(fmt(yn, 6) + ' m（x = ' + fmt(xn, 2) + ' m）');
       roL.set('定在波ではありません');
-      const ng = PROJ ? '定在波ではありません' : '速さ・振幅・振動数が一致していないので定在波ではありません';
+      const ng = PROJ ? '定在波ではありません' : '速さ・振幅・波長が一致していないので定在波ではありません';
       cv.textPx(ng, cv.pad.l + cv.iw - S(6), cv.pad.t + S(12), { align: 'right', color: C.wave2, size: 13, bold: true });
       const msg = PROJ ? '薄い「節」「腹」＝波1の条件での位置。節のはずでも変位が0でない（赤い線）'
         : '薄い「節」「腹」＝波1の条件で計算した位置。節のはずの場所でも変位が0になっていない（赤い線）';
