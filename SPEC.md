@@ -250,6 +250,7 @@
 - Claude（Fable）が設計・実装・検収。ページ単位でサブエージェント並行、共通ライブラリを先に固める。
 - 各ページ完成ごとに playwright でスクリーンショット＋自動テスト（受け入れ基準の数値検証を含む）を回し、ページ単位で commit。
 - 公開: GitHub 公開リポジトリ `Torao-cos/nami-lab`（MIT・© SciCos）→ GitHub Pages。ハブ用リポジトリは別途。
+- push / Pages 設定: `node tools/push.js`（`--repo scicos-lab --root D:/claude_projects/scicos-lab` で兼用）／`node tools/pages.js`。PAT は `D:/claude_projects/company/.env`（gitignore済み）の `GITHUB_PAT_NAMI_LAB` を `D:/claude_projects/company/tools/load-secrets.js` で読む（旧 claude_share/control の平文ファイルは2026-10-05廃止）。読み取りのみの確認は `--check`。
 - 公開後: おとラボにハブへのリンクを追加（1行）。
 
 ---

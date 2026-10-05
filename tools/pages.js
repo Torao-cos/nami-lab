@@ -1,19 +1,24 @@
 #!/usr/bin/env node
 /* tools/pages.js — GitHub Pages を main ブランチ / ルートで有効化し、公開URLを表示する
- *   node tools/pages.js [--repo nami-lab]
- * 認証は tools/push.js と同じ PAT ファイル（Pages: Read and write）。トークンは出力しない。 */
+ *   node tools/pages.js [--repo nami-lab] [--check]
+ *   --check … GET のみ（未作成でも POST しない）
+ * 認証は tools/push.js と同じ PAT（Pages: Read and write）。トークンは出力しない。
+ *   1) 環境変数 NAMI_GH_TOKEN
+ *   2) company 共通ローダーの GITHUB_PAT_NAMI_LAB（環境変数 → D:/claude_projects/company/.env）
+ *      ローダーの場所は env COMPANY_SECRETS_LOADER で上書き可。旧 claude_share/control の平文ファイルは 2026-10-05 に廃止。 */
 'use strict';
-const fs = require('fs');
 const args = process.argv.slice(2);
 const REPO = (i => (i >= 0 ? args[i + 1] : 'nami-lab'))(args.indexOf('--repo'));
-const CREDS = process.env.NAMI_GH_CREDS || 'C:/Users/Yasuhiro/OneDrive/事業用フォルダ/claude_share/control/github-nami-lab-pat.txt';
-const m = /Token:\s*(github_pat_[A-Za-z0-9_]+)/.exec(fs.readFileSync(CREDS, 'utf8'));
-if (!m) { console.error('token not found'); process.exit(2); }
-const H = { Authorization: 'Bearer ' + m[1], Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'nami-lab-tools' };
+const CHECK = args.includes('--check');
+const LOADER = process.env.COMPANY_SECRETS_LOADER || 'D:/claude_projects/company/tools/load-secrets.js';
+let token;
+try { token = process.env.NAMI_GH_TOKEN || require(LOADER).getSecret('GITHUB_PAT_NAMI_LAB'); }
+catch (e) { console.error('✗ GitHub トークンを読めない（loader: ' + LOADER + '）: ' + e.message); process.exit(2); }
+const H = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'nami-lab-tools' };
 const API = `https://api.github.com/repos/Torao-cos/${REPO}/pages`;
 (async () => {
   let r = await fetch(API, { headers: H });
-  if (r.status === 404) {
+  if (r.status === 404 && !CHECK) {
     r = await fetch(API, { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, H), body: JSON.stringify({ build_type: 'legacy', source: { branch: 'main', path: '/' } }) });
     console.log('create pages:', r.status);
     r = await fetch(API, { headers: H });
