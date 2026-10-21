@@ -1,6 +1,6 @@
 /* なみラボ 共通ライブラリ (Nami)  — 外部依存なし
  *
- * 使い方（各ページ）:
+ * 使い方（各ページ）:  ※おとラボの音シミュも ../nami-lab/common.js を読む（appName/appHref/footerBase で表記を変える）
  *   Nami.init({ title:'A 波の基本', tabs:[ {id, label, period:()=>T, scrub:true, build(ctx){ ...; return {draw(t,dt,running){...}} } }, ... ] });
  *
  * build(ctx) に渡る ctx:
@@ -398,12 +398,13 @@ window.Nami = (() => {
   app.showStatus = (sim, text) => { const tab = sim.tab; tab.ctx.statusEls.forEach(s => { s.textContent = text; s.hidden = !text; }); };
 
   function init(o) {
-    document.title = o.title + ' - なみラボ';
+    const appName = o.appName || 'なみラボ', appHref = o.appHref || './index.html';
+    document.title = o.title + ' - ' + appName;
     const hub = o.hub || '../scicos-lab/';
     const header = el('header', 'top');
     const crumb = el('div', 'crumb');
     const a1 = el('a', null, 'SciCos 理科ラボ'); a1.href = hub; crumb.appendChild(a1); crumb.appendChild(document.createTextNode('›'));
-    const a2 = el('a', null, 'なみラボ'); a2.href = './index.html'; crumb.appendChild(a2); crumb.appendChild(document.createTextNode('›'));
+    const a2 = el('a', null, appName); a2.href = appHref; crumb.appendChild(a2); crumb.appendChild(document.createTextNode('›'));
     crumb.appendChild(el('span', 'title', o.title)); header.appendChild(crumb);
     header.appendChild(el('span', 'right', 'クリック=停止/再開　◀▶=コマ送り　Space/←→キー可'));
     // 表示モード切替（投影／手元）。選択を保存してページを読み直す（色定数は読み込み時に確定するため）
@@ -413,7 +414,7 @@ window.Nami = (() => {
     document.body.appendChild(header);
     const nav = el('nav', 'tabs'); document.body.appendChild(nav);
     const main = el('main'); document.body.appendChild(main);
-    const footer = el('footer'); footer.innerHTML = (o.footer ? o.footer + '<br>' : '') + '画面をクリック／タップで停止・再開。停止中も点やカット線はドラッグできます。時間バーで過去に戻れます（回折を除く）。 © SciCos / MIT License'; document.body.appendChild(footer);
+    const footer = el('footer'); footer.innerHTML = (o.footer ? o.footer + '<br>' : '') + (o.footerBase != null ? o.footerBase : '画面をクリック／タップで停止・再開。停止中も点やカット線はドラッグできます。時間バーで過去に戻れます（回折を除く）。') + ' © SciCos / MIT License'; document.body.appendChild(footer);
 
     o.tabs.forEach(tab => {
       const btn = el('button'); btn.innerHTML = mathHTML(tab.label); btn.addEventListener('click', () => activate(tab.id, true)); nav.appendChild(btn); tab.btn = btn;

@@ -4,7 +4,7 @@
 const PW = 'C:/Users/Yasuhiro/AppData/Local/npm-cache/_npx/e41f203b7505f1fb/node_modules/playwright-core';
 const { chromium } = require(PW);
 const http = require('http'); const fs = require('fs'); const path = require('path');
-const ROOT = path.join(__dirname, '..');
+const ROOT = process.env.SHOT_ROOT || path.join(__dirname, '..'); // おとラボ等は SHOT_ROOT=D:/claude_projects で oto-lab/xxx.html を指定
 const [target, out, W = '1280', H = '800', WAIT = '1500', CLICK = ''] = process.argv.slice(2);
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
 const server = http.createServer((req, res) => {
