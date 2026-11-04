@@ -255,7 +255,7 @@ function check(name, ok, detail = '') {
   // --- 文言 ---
   const seisTxt = await page.locator('.view.show').first().innerText();
   check('「地震発生からの時間」の表現になっている', /地震発生からの時間/.test(seisTxt) && !/地震の時刻/.test(seisTxt));
-  check('再生速度が「画面の1秒＝実際の○秒」で説明されている', /再生速度/.test(seisTxt) && /画面の1秒＝実際の60秒/.test(seisTxt));
+  check('再生速度が ×60 と表示され、時間縮尺の注記文はない', /再生速度/.test(seisTxt) && /×60/.test(seisTxt) && !/画面の1秒＝実際/.test(seisTxt));
 
   // --- 表示チェックが8つ独立している（P/S × 射線・波面・影 ＋ ラベル・地震計） ---
   const togLabels = await page.locator('.view.show .controls:not(.detail) label').allTextContents();
@@ -343,9 +343,9 @@ function check(name, ok, detail = '') {
   check('再生速度を変えても地震発生からの時間は保たれる', Math.abs(qA - qB) < 2, `${qB} → ${qA} s`);
   check('再生速度を変えても地震時間の右端は同じ（画面の秒数だけ変わる）', Math.abs(bar2 - tEnd / 600) < 0.05, `右端 ${bar2.toFixed(3)} 画面秒 = 地震 ${(bar2 * 600).toFixed(0)} s`);
   const spTxt = await page.locator('.view.show .controls:not(.detail)').first().innerText();
-  check('再生速度の最大が ×600（意味つき表示）', /×600（画面の1秒＝実際の600秒）/.test(spTxt), spTxt.slice(0, 60));
+  check('再生速度の最大が ×600', /×600/.test(spTxt), spTxt.slice(0, 60));
   await setSpeed(0);
-  check('再生速度の最小が ×15', /×15（画面の1秒＝実際の15秒）/.test(await page.locator('.view.show .controls:not(.detail)').first().innerText()));
+  check('再生速度の最小が ×15', /×15(?!d)/.test(await page.locator('.view.show .controls:not(.detail)').first().innerText()));
   await setSpeed(2);   // ×60 に戻す
 
   // --- 地震計の小窓をドラッグで動かせる ---

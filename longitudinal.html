@@ -156,13 +156,11 @@ function buildLT(ctx) {
   ui.toggle(ctx.controls, { label: '疎・密ラベル', checked: showLabels, onChange: v => showLabels = v });
   ui.toggle(ctx.controls, { label: 'λ ブラケット（黄色の●をドラッグで起点の山・密を選べる）', checked: showLam,
     onChange: v => { showLam = v; hT.hidden = !v; hL.hidden = !v; } });
-  ui.note(ctx.controls, '黄色い玉に注目：時間がたっても右へは進まない。進むのは「振動のようす」だけ。');
-  ui.note(ctx.controls, '「密」と書いてある所では、左どなりの玉が右へ、右どなりの玉が左へずれている（紫の矢印＝つり合いの位置からのずれ）。両側から玉が寄ってくるから混みあう。「疎」はその逆。ラベルは規則で貼っているのではなく、この2本の矢印の向きがそのまま理由。');
+  ui.note(ctx.controls, '黄色い玉に注目。紫の矢印＝つり合いの位置からのずれ。');
 
   ui.toggle(ctx.detail, { label: '注目した玉の軌跡（振動の範囲）', checked: showTrail, onChange: v => showTrail = v });
   ui.toggle(ctx.detail, { label: 'つり合いの位置の目印', checked: showEq, onChange: v => showEq = v });
   ui.slider(ctx.detail, { label: '玉の数 N', min: 21, max: 81, step: 2, value: N, digits: 0, onInput: v => N = Math.round(v) });
-  ui.note(ctx.detail, '振幅 A の上限は λ/2π。これを超えると玉が隣を追い越してしまい、媒質として成り立たない。');
 
   applyMode();
 
@@ -539,13 +537,9 @@ function buildSeismic(ctx) {
     window.__nami_debug = Object.assign(window.__nami_debug || {}, { shadow: BND });
     readShadow.set(`P：${fmt(BND.pStart, 1)}°〜${fmt(BND.pEnd, 1)}°　／　S：${fmt(BND.sStart, 1)}°以遠`);
     noteWhy.innerHTML = mathHTML(
-      `教科書の「P 103°〜143°」とずれる理由：ここで計算しているのは波線（射線）＝スネルの法則でたどれる道すじだけ。` +
-      `マントルだけを通って地表にもどる P がとどく限界は計算値 ${fmt(BND.pStart, 1)}°。` +
-      `教科書の 103° は、外核の表面をかすめて回り込む P（回折波）まで含めた観測値で、波線の計算には出てこない。` +
-      `つまりこの差は速度分布の誤差ではなく、「波線で考える」という方法そのものの限界。` +
-      `向こう側の縁 ${fmt(BND.pEnd, 1)}° は、外核を通りぬけた P（PKP）がもどってくる最小の角距離（教科書の 143° にあたる）。` +
-      `S の影が ${fmt(BND.sStart, 1)}° 以遠になるのは、液体の外核を S 波が通れず、外核にぶつかった波線がそこで終わるから（波線上の × 印）。` +
-      `なお帯の中がまったくの無音ではない：内核を通った（または内核の表面ではね返った）弱い P が届く。帯は「マントルだけを通る P も、外核を通りぬける P（PKP）も届かない範囲」という意味。`
+      `教科書の P の影「103°〜143°」の 103° は、外核の表面を回り込む P（回折波）を含む観測値。波線（スネルの法則）でたどれる P の限界は ${fmt(BND.pStart, 1)}°（速度分布の誤差ではなく、波線で考える方法の限界）。` +
+      `${fmt(BND.pEnd, 1)}° は外核を通りぬけた P（PKP）が戻る最小の角距離（教科書の 143°）。S の影が ${fmt(BND.sStart, 1)}° 以遠なのは、液体の外核を S 波が通れないから（× 印）。` +
+      `影の帯にも、内核を通った弱い P は届く。`
     );
     startFront();
   }
@@ -641,7 +635,7 @@ function buildSeismic(ctx) {
   sD.el.addEventListener('change', () => rebuildAnalysis());
   ui.slider(ctx.controls, {
     label: '再生速度', min: 0, max: SPEEDS.length - 1, step: 1, value: SPEEDS.indexOf(60),
-    fmt: v => `×${SPEEDS[Math.round(v)]}（画面の1秒＝実際の${SPEEDS[Math.round(v)]}秒）`,
+    fmt: v => `×${SPEEDS[Math.round(v)]}`,
     onInput: v => {
       const old = SEIS.scale, nw = SPEEDS[Math.round(v)];
       if (nw !== old) { SEIS.scale = nw; ctx.sim.setT(ctx.sim.t * old / nw); }   // 地震の時刻を保ったまま速さだけ変える
@@ -651,7 +645,6 @@ function buildSeismic(ctx) {
   const readShadow = ui.readout(ctx.controls, { label: 'この速度分布から計算した影', value: '計算中…' });
   const readObs = ui.readout(ctx.controls, { label: '観測点', value: '' });
   const readPS = ui.readout(ctx.controls, { label: '初期微動継続時間 S−P', value: '' });
-  ui.note(ctx.controls, '●をドラッグ：灰＝震源の深さ、黄＝観測点。地震計の小窓も図の中で動かせる。');
   ui.note(ctx.controls, 'うすい線＝これから通る道すじ、濃い線＝もう通った所。教科書の値とのずれは「詳しく」。');
 
   /* --- 「詳しく」 --- */
@@ -664,10 +657,9 @@ function buildSeismic(ctx) {
     label: '速度分布 v(r) のグラフ', checked: showVprof,
     onChange: v => { showVprof = v; cvV.box.hidden = !v; ctx.layout(v ? '2' : '1'); cv.resize(); cvV.resize(); }
   });
-  ui.note(ctx.detail, '波線は1本も途中で打ち切っていない。真下に出た P もふくめ、すべて地表までたどってある（まだ波が来ていない先の部分もうすい線で出してある）。内核を通る P（PKIKP）と内核の表面ではね返る P（PKiKP）は細く薄い線。S の波線だけは外核の入口で終わる（液体は S波を通さない）。外核の表面での反射（PcP など）は扱っていない。');
-  ui.note(ctx.detail, '波面は表示用の波線ではなく、別に用意した細かい射出角（P・S とも 500〜700 本。外核・内核の入口のまわりは指数的に細かく刻む）で計算している。波面が外核の入口で大きく折れ、そこに細い破線が入るのは、外核で速さが 13.7→8.1 km/s に落ちて波線が急に内側へ曲がり、そのあいだに波線が1本も通らない所ができるから。破線はその「波線では埋まらないすきま」＝影のもとを示している。');
-  ui.note(ctx.detail, '時間バーの右端＝いちばん遅い波が地表（S は外核）に着いてから約2秒後（再生速度 ×60 換算で 120 秒ぶん）。そこまで行くと地震発生の瞬間へもどってくり返す。再生速度を変えても右端の「地震発生からの時間」は変わらない（画面の秒数のほうが変わる）。');
-  ui.note(ctx.detail, '速度分布は PREM（Dziewonski &amp; Anderson 1981）の値をそのまま折れ線で近似したもの。地殻・海洋だけは省略し、最上部マントルの値で代表させている（厚さ40 kmほどなので角距離への影響は 0.1° 未満）。速度を教科書の 103° に合うように書きかえることはしていない。');
+  ui.note(ctx.detail, '細く薄い線＝内核を通る P（PKIKP）と内核の表面ではね返る P（PKiKP）。');
+  ui.note(ctx.detail, '波面の細い破線＝波線が1本も通らないすきま（影のもと）。外核で速さが 13.7→8.1 km/s に落ちて波線が急に内側へ曲がるためにできる。');
+  ui.note(ctx.detail, '速度分布は PREM（Dziewonski &amp; Anderson 1981）の折れ線近似（地殻は省略）。');
 
   /* --- ドラッグできる点 --- */
   cv.addHandle({
@@ -830,7 +822,7 @@ function buildSeismic(ctx) {
     drawBox(te);
     cv.overlay.textContent = frontJob ? '波面を計算中…' : '再生速度 ×' + SEIS.scale;
     // 投影モードでは CSS で幅を左 40% に制限して折り返す＝中央上の「震源」のラベルに重ねない
-    cv.overlayTL.textContent = '模式図（層の厚さは実際の比率）　外核＝深さ2891 km〜　内核＝深さ5150 km〜';
+    cv.overlayTL.textContent = '層の厚さは実際の比率　外核＝深さ2891 km〜　内核＝深さ5150 km〜';
   }
 
   /* --- 観測点の簡易地震計（ドラッグで動かせる小窓） --- */
@@ -914,9 +906,9 @@ function buildLTG(ctx) {
   const ROTMS = 1300;
   ctx.layout('1'); ctx.stage.classList.add('rows3');
 
-  const c1 = ctx.canvas({ title: '① 縦波（媒質の玉）　x軸の正の向き：右 →　玉が混みあう所＝密（おし縮められて高圧）／すく所＝疎（低圧）' });
+  const c1 = ctx.canvas({ title: '① 縦波（媒質の玉）　混みあう所＝密（高圧）／すく所＝疎（低圧）' });
   const c2 = ctx.canvas({ title: '② 各玉の変位を矢印で（玉＝つり合いの位置・右向きを正）' });
-  const c3 = ctx.canvas({ title: '③ 矢印を90°回すと「横波表示」になる（矢印の長さ＝変位の大きさ。回しても長さは変わらない）' });
+  const c3 = ctx.canvas({ title: '③ 矢印を90°回すと「横波表示」になる' });
   // 投影モードは文字も余白も 1.6 倍。3段のこのタブでも既定の余白（上下で 78px）だけで描画面が埋まって
   // 図がつぶれるので、目盛りを出さない段の余白を削って中身の高さを取り戻す。
   if (PROJ) {
@@ -931,18 +923,18 @@ function buildLTG(ctx) {
     rotFrom = rot; rotTarget = (rotTarget === 90 ? 0 : 90); rotT0 = performance.now();
     rotBtn.textContent = rotTarget === 90 ? '矢印を戻す ↺' : '矢印を回す ↻';
   } });
-  ui.note(ctx.controls, '回すのは手品ではない：右向きの変位を上向きに、左向きの変位を下向きに写し替えているだけ。矢印の長さ（変位の大きさ）は変えていない。左右のずれは重なって見えないので、縦にそろえて見やすくする約束。');
+  ui.note(ctx.controls, '右向きの変位を上向きに、左向きを下向きに写し替えるだけ（矢印の長さ＝変位の大きさは変えない）。左右のずれは重なって見にくいので縦にそろえる約束。');
   ui.toggle(ctx.controls, { label: '疎・密ラベル', checked: showLabels, onChange: v => showLabels = v });
   ui.toggle(ctx.controls, { label: '疎密の位置の縦線', checked: showGuides, onChange: v => showGuides = v });
-  ui.note(ctx.controls, '「密」は変位が ＋→− に変わる点。そこでは左どなりの玉が右へ、右どなりの玉が左へずれている＝両側から玉が寄ってくるから混みあう（②の太い2本の矢印）。「疎」はその逆で、両側へ離れていくのですいてくる。');
+  ui.note(ctx.controls, '密では左どなりの玉が右へ、右どなりの玉が左へずれて、両側から寄ってくる（②の太い2本の矢印）。疎はその逆。');
 
   const revBtn = ui.button(ctx.detail, { label: '正の向きを反転する（→ ⇄ ←）', onClick: () => {
     rev = !rev; revBtn.classList.toggle('active', rev);
-    revNote.textContent = rev ? '変位の正の向き：左 ←（反転中）— ②の矢印と③の横波表示は上下反転する。①の玉の位置と疎・密の場所は動かない：正の向きは人間が決めた約束にすぎず、玉が実際にどこに並んでいるかは約束のとり方に関係ないから。'
+    revNote.textContent = rev ? '変位の正の向き：左 ←（反転中）'
                               : '変位の正の向き：右 →（標準）';
   } });
   const revNote = ui.note(ctx.detail, '変位の正の向き：右 →（標準）');
-  ui.note(ctx.detail, '疎密を式で書くと Δρ ∝ −∂ξ/∂x（ξ＝変位）。∂ξ/∂x が負の所では、左の玉のずれ ξ が右どなりの玉より大きい（右向きを正として）＝間がつまって混みあう。だから密は −∂ξ/∂x が最大の点、疎は最小の点。③の横波表示（正の向き：右のとき）でいえば、曲線が右下がりにいちばん急な所が密、右上がりにいちばん急な所が疎。正の向きを反転すると ξ の符号と一緒に式の符号も入れかわるので、疎・密の場所は変わらない。');
+  ui.note(ctx.detail, '疎密を式で書くと Δρ ∝ −∂ξ/∂x（ξ＝変位）。');
   ui.toggle(ctx.detail, { label: '媒質の速度矢印（①）', checked: showVel, onChange: v => showVel = v });
   ui.slider(ctx.detail, { label: '玉の数 N', min: 21, max: 61, step: 2, value: N, digits: 0, onInput: v => N = Math.round(v) });
 
@@ -997,9 +989,8 @@ function buildLTG(ctx) {
         for (const x of rareX(t))  cv.text('離れる', x, -yM * 0.5, { color: SPARSE, bold: true, size: 11 });
       }
     });
-    // 投影モードは注記を短く（大きい文字だと図の上の「寄る」ラベルに重なる。長い説明は下の操作パネルにある）
     cv.overlayTL.textContent = (rev ? '変位の正の向き：左 ←' : '変位の正の向き：右 →')
-      + (PROJ ? '' : '　玉＝つり合いの位置、矢印＝そこからの変位。太い2本＝密・疎をはさむ玉（密では向かい合い、疎では離れる）');
+      + (PROJ ? '' : '　太い2本＝密・疎をはさむ玉');
   }
 
   function draw3(t) {
@@ -1026,10 +1017,7 @@ function buildLTG(ctx) {
         for (const x of rareX(t))  cv.text('疎', x, cv.view.y1 * 0.86, { color: SPARSE, bold: true, size: 14 });
       }
     });
-    // 投影モードでは出さない：90°回したあとの緑の曲線と「密・疎」のラベルがこの位置に来るため。
-    // 同じ文は下の操作パネルの注記（「回すのは手品ではない：…」）にそのまま書いてある。
-    cv.overlayTL.textContent = PROJ ? ''
-                                    : '右向きの変位を上向きに、左向きの変位を下向きに写し替えているだけ（長さはそのまま・図を見やすくするための約束）';
+    cv.overlayTL.textContent = '';   // 写し替えの理由は操作パネルの注記にある（同じ文を二重に置かない）
     cv.overlay.textContent = rot > 88 ? '回転 90°　緑の曲線＝矢印の先をつないだもの＝横波表示' : '回転 ' + fmt(rot, 0) + '°';
   }
 
@@ -1058,7 +1046,6 @@ function buildLTG(ctx) {
 /* =================================================================== */
 Nami.init({
   title: 'C 縦波',
-  footer: '⑥ 同じ媒質を横波／縦波で切り替え　⑦ 地球内部の波線追跡（球対称スネルの法則）　⑧ 縦波を横波表示に直す手順',
   tabs: [
     { id: 'lt',      label: '6 縦波と横波',       period: () => S.T, build: buildLT },
     { id: 'seismic', label: '7 地震のP波・S波',   period: () => SEIS.tEnd / SEIS.scale, build: buildSeismic },

@@ -228,7 +228,7 @@ function buildSuperpose(ctx) {
   ui.sep(ctx.controls);
   const w2 = makeWaveCtl(ctx, ctx.controls, { label: '波2（左へ）', color: C.wave2, shape: 'p:saw', A: 1.0, w: 1.5, lam: 2.0, v: 1.0, dir: -1, x0: 8.5, getCv: () => cv });
   ui.sep(ctx.controls);
-  ui.note(ctx.controls, '速さの注意：同じ媒質では波の速さは等しい（v₁ = v₂）。ここでの速さの違いはシミュレーション上の仮想操作です。');
+  ui.note(ctx.controls, '注意：同じ媒質では波の速さは等しい（v₁ = v₂）。');
 
   const t1 = ui.toggle(ctx.controls, { label: '波1', checked: true });
   const t2 = ui.toggle(ctx.controls, { label: '波2', checked: true });
@@ -243,7 +243,7 @@ function buildSuperpose(ctx) {
       ctx.sim.setT(ts); ctx.sim.pause(); ro.set('t* = ' + fmt(ts, 2) + ' s');
     }
   }]);
-  ui.note(ctx.controls, '重ね合わせの原理：合成波の変位は各波の変位の和。すれちがった後、それぞれの波は元の形・元の速さのまま進む（波の独立性）。「詳しく」で各波の開始位置を変えられます。');
+  ui.note(ctx.controls, '重ね合わせの原理：合成波の変位＝各波の変位の和。');
 
   periodHolder.sup = () => Math.max(0.2, Math.min(w1.period(), w2.period()));
 
@@ -309,14 +309,14 @@ function buildReflect(ctx) {
   ]);
   /* 作図の「なぜそうなるのか」＝手順と同じ画面に理由を置く（ステップごとに切り替え） */
   const REASON = [
-    'いまは入射波だけ。このあと「壁に当たった波がどうなるか」を、理由をたどりながら作図でつくります。',
-    '<b>①なぜ延長するのか</b>：壁の向こうに波は実在しませんが、「もし壁がなかったら」の波を描いておくと、折り返しのもとになります（薄い線＝仮想の波）。',
-    '<b style="color:' + C.node + '">②固定端</b>：端は動けない（変位が常に0）。壁の向こうに<b>上下反転して折り返した仮想の波</b>を置くと、壁の位置で入射波と打ち消し合って常に0になる＝これが反射波。<br>' +
-    '<b style="color:' + C.anti + '">②自由端</b>：端は自由に動ける（端を引き戻す力がない）。壁について<b>線対称に折り返した仮想の波</b>を置くと、壁の位置で入射波と同じ変位が重なり傾きが0になる＝端が最大 2A まで動く。',
-    '<b>③なぜ足すのか</b>：重ね合わせの原理。実際に見える波（緑）は入射波と反射波の変位の和。壁より左だけが実在で、右は作図のための仮想領域です。'
+    '',
+    '<b>①なぜ延長するのか</b>：「もし壁がなかったら」の波（薄い線）が、折り返しのもとになる。',
+    '<b style="color:' + C.node + '">②固定端</b>：端は動けない（変位が常に0）。<b>上下反転して折り返した仮想の波</b>なら、壁で入射波と打ち消し合って常に0になる。<br>' +
+    '<b style="color:' + C.anti + '">②自由端</b>：端を引き戻す力がない。<b>線対称に折り返した仮想の波</b>なら、壁で同じ変位が重なって傾きが0になる。',
+    '<b>③なぜ足すのか</b>：重ね合わせの原理。実際の波（緑）は入射波と反射波の変位の和。'
   ];
   const reasonBox = document.createElement('div'); reasonBox.style.display = 'contents'; ctx.controls.appendChild(reasonBox);
-  function setReason(html) { reasonBox.textContent = ''; ui.note(reasonBox, html).classList.add('reason'); }
+  function setReason(html) { reasonBox.textContent = ''; if (html) ui.note(reasonBox, html).classList.add('reason'); }
   function setStep(s) { step = s; stepBtns.forEach((b, i) => b.classList.toggle('active', i === s)); setReason(REASON[s]); }
   setStep(3);
   ui.sep(ctx.controls);
@@ -325,7 +325,6 @@ function buildReflect(ctx) {
   const tS = ui.toggle(ctx.controls, { label: '合成波', checked: true });
   const roF = ui.readout(ctx.controls, { label: '自由端 壁の変位', value: '—' });
   const roX = ui.readout(ctx.controls, { label: '固定端 壁の変位', value: '—' });
-  ui.note(ctx.controls, '作図法：①壁がないものとして入射波を壁の向こうまで延長する（仮想の領域）。②自由端は壁について線対称に折り返す／固定端は上下を反転してから折り返す。③入射波と反射波を足すと実際の波（合成波）になる。壁の位置 L = 8.0 m。');
 
   periodHolder.ref = () => Math.max(0.2, inc.period());
 
@@ -463,9 +462,9 @@ function buildStanding(ctx) {
   const tM = ui.toggle(g1, { label: '節・腹', checked: true });
   const roN = ui.readout(g1, { label: '節の変位', value: '—' });
   const roL = ui.readout(g1, { label: '状態', value: '—' });
-  ui.note(g1, '速さの注意：同じ媒質では波の速さは等しい（v₁ = v₂）。ここでの速さの違いはシミュレーション上の仮想操作です。速さ・振幅・波長の3つがそろったときだけ定在波になります（振動数 f = v/λ は自動的に一致）。');
+  ui.note(g1, '注意：同じ媒質では波の速さは等しい（v₁ = v₂）。');
   ui.formula(ctx.detail, '教材1の位相：y₁ + y₂ = A sin2π(t/T − x/λ) + A sin2π(t/T + x/λ) = <b>2A sin(2πt/T) · cos(2πx/λ)</b>　（和積の公式）');
-  ui.note(ctx.detail, '時間の部分 sin(2πt/T) と場所の部分 cos(2πx/λ) が分かれる＝波形は左右に進まず、各点が「その場所ごとの振幅 2A cos(2πx/λ)」で単振動する。cos(2πx/λ) = 0 になる場所が節（動かない）、|cos(2πx/λ)| = 1 になる場所が腹（最大 2A で動く）。3量のどれかがずれるとこの形に因数分解できず、節が止まらない／模様が流れる。');
+  ui.note(ctx.detail, '時間の部分 sin(2πt/T) と場所の部分 cos(2πx/λ) が分かれる＝各点が振幅 2A cos(2πx/λ) で単振動する。');
 
   /* --- 教材2 --- */
   const g2 = document.createElement('div'); g2.style.display = 'contents'; ctx.controls.appendChild(g2);
@@ -477,7 +476,6 @@ function buildStanding(ctx) {
   const tR2 = ui.toggle(g2, { label: '反射波', checked: true });
   const tS2 = ui.toggle(g2, { label: '合成波', checked: true });
   const roW = ui.readout(g2, { label: '壁の変位', value: '—' });
-  ui.note(g2, '連続した正弦波を壁に当て続けると、入射波と反射波が重なって定在波ができる。固定端では壁が節、自由端では壁が腹になり、そこから λ/4 ごとに節と腹が交互に並ぶ。');
 
   function sync() { const m = mode.get(); g1.style.display = (m === 'm1') ? 'contents' : 'none'; g2.style.display = (m === 'm2') ? 'contents' : 'none'; }
   sync();
@@ -611,10 +609,8 @@ function buildLT(ctx) {
   const tM = ui.toggle(ctx.controls, { label: '節・腹の縦線', checked: true });
   const tL = ui.toggle(ctx.controls, { label: '疎・密ラベル', checked: true });
   const tC = ui.toggle(ctx.controls, { label: '成分波を表示（②）', checked: false });
-  ui.note(ctx.controls, '変位の節（玉がほとんど動かない位置）＝疎密の変化が最大。変位の腹（玉が大きく動く位置）＝疎密は変化しない。玉の間隔は 0.25 m、x軸の正の向きは右。');
   ui.formula(ctx.detail, '疎密（圧力）∝ −∂ξ/∂x　／　媒質の速度 = ∂ξ/∂t');
-  ui.note(ctx.detail, '疎密：変位 ξ が右上がり（∂ξ/∂x が正）の場所は右の玉ほど右へ寄る＝間隔が広がって疎、右下がりの場所は間隔が縮んで密。だから圧力変化はマイナスの傾きに比例する。媒質の速度：②の曲線の「傾き」ではなく、各点の変位が時間とともに変わる速さ。変位が0を通る瞬間に速さが最大、変位が最大の瞬間に速さは0。');
-  ui.note(ctx.detail, 'この画面の定在波は、右へ進む縦波 ξ₁ と左へ進む縦波 ξ₂ の和として計算しています（2A sin·cos の式を直接描いていません）。「成分波を表示」で ξ₁（青破線）と ξ₂（赤破線）が見えます。');
+  ui.note(ctx.detail, '定在波 ξ は、右へ進む縦波 ξ₁ と左へ進む縦波 ξ₂ の和。');
 
   periodHolder.lt = () => sT.get();
 
@@ -729,8 +725,6 @@ function buildLT(ctx) {
           cv.textPx(kind === 'n' ? '節' : '腹', X, markY, { color: kind === 'n' ? C.node : C.anti, size: 13, bold: true });
         }
       }
-      const sum = PROJ ? '節＝疎密の変化が最大／腹＝疎密は変化しない' : '変位の節＝疎密の変化が最大／変位の腹＝疎密は変化しない';
-      if (cv.iw > S(620)) cv.textPx(sum, cv.pad.l + cv.iw - S(4), bandTop + S(10), { align: 'right', color: C.text, size: 12 });
     }
   };
 }
@@ -738,7 +732,6 @@ function buildLT(ctx) {
 /* ===================== init ===================== */
 Nami.init({
   title: 'D 重ね合わせ',
-  footer: '重ね合わせの原理・波の独立性・反射（自由端／固定端）・定在波・縦波の定在波。',
   tabs: [
     { id: 'superpose', label: '9 重ね合わせ', period: () => (periodHolder.sup ? periodHolder.sup() : 2), build: buildSuperpose },
     { id: 'reflect', label: '10 反射', period: () => (periodHolder.ref ? periodHolder.ref() : 2), build: buildReflect },

@@ -124,9 +124,8 @@ function buildHuygens(ctx) {
   ui.slider(ctx.controls, { label: 'λ', min: 0.6, max: 3, step: 0.1, value: 2, unit: 'm', digits: 1, onInput: v => st.lam = v });
   ui.slider(ctx.controls, { label: 'T', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
   const F = ui.formula(ctx.controls, '');
-  note(ctx.controls, '波面上の各点からは同じ速さの素元波（球面波）が出る。それらに共通に接する面＝<b>包絡面</b>が、Δt 後の波面になる。半径 r を大きくすると次の波面が見えてくる。');
+  note(ctx.controls, '波面上の各点から同じ速さの素元波が出る。それらに共通に接する面（<b>包絡面</b>）が Δt 後の波面になる。');
   ui.toggle(ctx.detail, { label: '通り過ぎた波面を残す', checked: true, onChange: v => st.trail = v });
-  note(ctx.detail, '素元波の「後ろ向きの部分」は実際には現れない（前方にだけ進む）。「半円で描く」で教科書と同じ図になる。');
 
   return {
     draw(t) {
@@ -203,8 +202,7 @@ function buildHuygens(ctx) {
       cv.text('素元波 r = ' + fmt(r, 2) + ' m', cv.view.x0 + (cv.view.x1 - cv.view.x0) * .5, cv.view.y0, { dy: -12, color: C.guide });
       cv.drawHandles();
       F.set('v = λ/T = ' + fmt(lam, 2) + ' / ' + fmt(T, 2) + ' = <b>' + fmt(lam / T, 2) + '</b> m/s　　'
-        + 'Δt = <b>' + fmt(dt, 2) + '</b> s　　r = vΔt = <b>' + fmt(r, 2) + '</b> m'
-        + (st.auto ? '　<em>（自動：Δt = T ごとに波面が λ 進む）</em>' : '　<em>（スライダーで手動）</em>'));
+        + 'Δt = <b>' + fmt(dt, 2) + '</b> s　　r = vΔt = <b>' + fmt(r, 2) + '</b> m');
       if (st.auto) { const q = r / lam; if (Math.abs(sR.get() - q) > 0.005) sR.set(Math.min(1.2, q), true); }
     },
     period: () => st.T
@@ -362,7 +360,7 @@ function buildReflect(ctx) {
   ctx.layout('2'); ctx.stage.classList.add('stageRL');
   const T_DRAFT = '作図（素元波）— 壁上の各点から出た素元波の包絡線が反射波面';
   const T_TANK = '壁つき波動タンク（数値計算）— 壁は変位 0。反射が現象として出る';
-  const cvA = ctx.canvas({ title: '隊列モデル — 波面＝横一列の点の列。壁に着いた点から順に、法線方向の速度成分が反転する' });
+  const cvA = ctx.canvas({ title: '隊列モデル — 壁に着いた点から順に、壁に垂直な速度成分だけが反転する' });
   const cvB = ctx.canvas({ title: T_DRAFT });
   const st = { i: 40, wall: 0, lam: 2, T: 2, dots: true, ray: true, wavelet: true, env: true, len: true, sweep: false, tank: false, gain: 1 };
   const SWEEP_MAX = 85, SWEEP_P = 16, TST = 40;   // タンク: λ = 0.5 × 40 = 20 セル
@@ -388,12 +386,9 @@ function buildReflect(ctx) {
   ui.slider(ctx.controls, { label: 'T', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
   ui.legend(ctx.controls, [[C.wave1, '青＝入射波面'], [C.wave2, '赤＝反射波面']]);
   const F = ui.formula(ctx.controls, '');
-  note(ctx.controls, '左＝現象。<b>壁に先に着いた点から順に、壁に垂直な向きの速度成分だけが反転する</b>（壁に沿う向きの成分はそのまま）。先に着いた点から折り返すので、列全体が向きを変えて反射波面になる。／右＝作図。<b>壁上の各点から出る素元波の半径は、その点に波面が着いてからの経過時間 × v</b> なので点ごとに違う（A のものがいちばん大きく、B′ のものは 0）。その包絡線が反射波面。');
+  note(ctx.controls, '右の作図：壁上の各点から出る素元波の半径＝<b>その点に波面が着いてからの時間 × v</b>（A が最大、B′ は 0）。');
   ui.slider(ctx.detail, { label: 'タンクの明るさ', min: 0.3, max: 3, step: 0.1, value: 1, digits: 1, onInput: v => st.gain = v });
-  note(ctx.detail, '壁の角度はスライダーのほか、<b>壁の上の黄色い点のドラッグ</b>でも変えられる。');
   const tTank = ui.toggle(ctx.detail, { label: '右の画面を「壁つき波動タンク（数値計算）」にする', checked: false, onChange: setTankMode });
-  note(ctx.detail, '隊列モデルは作図ではなく<b>追跡</b>：壁を q で横切るレイごとに「その点が壁に着く時刻」を出し、それ以前は速さ v・向き d、それ以後は法線成分だけを反転した向き d′ で位置を計算している。だから <b>i = r は結果であって、覚える規則ではない</b>。');
-  note(ctx.detail, 'タンクは2次元波動方程式を差分法で解いたもの（壁＝変位 0 の固い面）。λ が 20 セルになるように 1 m の長さを決めている。<b>タンク表示中は時間を戻せない</b>（場を1ステップずつ積み上げるため。◀ と時間バーは無効）。');
 
   const reTank = () => { tank.rebuild(); if (st.tank) tank.warm(); };
 
@@ -552,7 +547,7 @@ function buildReflect(ctx) {
 
     if (degen) {
       cvB.text('入射角 0°（垂直入射）', (V.x0 + V.x1) / 2, V.y0 + (V.y1 - V.y0) * 0.24, { color: C.muted, bold: true, size: 15 });
-      cvB.text('波面は壁に平行 — どの点も同時に着き、そのまま折り返す', (V.x0 + V.x1) / 2, V.y0 + (V.y1 - V.y0) * 0.15, { color: C.muted, size: 13 });
+      
     } else {
       // 素元波（壁の各点から出た円の、媒質側の半分）
       if (st.wavelet) {
@@ -670,7 +665,7 @@ function buildReflect(ctx) {
       const F0 = draft(), g = F0.g;
       if (g.si < 0.03) {
         F.set('v = λ/T = ' + fmt(g.lam, 2) + ' / ' + fmt(g.T, 2) + ' = <b>' + fmt(g.v, 2) + '</b> m/s'
-          + '<br>入射角 0°：A も B も同時に壁に着く（Δt = 0）ので BB′ = 0、AA″ = 0。波面は壁に平行なまま向きだけが反転する。');
+          + '<br>入射角 0°：Δt = 0 なので BB′ = AA″ = 0。');
       } else {
         F.set('v = λ/T = ' + fmt(g.lam, 2) + ' / ' + fmt(g.T, 2) + ' = <b>' + fmt(g.v, 2) + '</b> m/s'
           + "　Δt（B が B′ に着くまで）= BB′/v = <b>" + fmt(F0.dt, 2) + '</b> s'
@@ -713,7 +708,7 @@ function buildReflect(ctx) {
    ========================================================= */
 function buildRefract(ctx) {
   ctx.layout('2');
-  const cvA = ctx.canvas({ title: '隊列モデル — 波面＝「横一列に並んで同じ速さで進む点の列」。境界に着いた点から速さが変わる' });
+  const cvA = ctx.canvas({ title: '隊列モデル — 境界に着いた点から順に速さが変わる' });
   const cvB = ctx.canvas({ title: '二媒質の波動タンク（数値計算）— 同じ λ・T・入射角で解いたもの' });
   const st = { v1: 1.5, v2: 1.0, i: 50, T: 2, dots: true, ray: false, gain: 1 };
   const CELL_MIN = 16;   // 遅い側の λ を最低このセル数にする（数値分散を抑える）
@@ -727,12 +722,8 @@ function buildRefract(ctx) {
   ui.toggle(ctx.controls, { label: '射線（点が通る道すじ）', checked: false, onChange: v => st.ray = v });
   ui.slider(ctx.controls, { label: 'T（周期）', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => { st.T = v; reTank(); } });
   const F = ui.formula(ctx.controls, '');
-  note(ctx.controls, '左＝隊列モデル。波面を「横一列に並んで同じ速さで進む点の列」と見る。<b>境界に先に着いた点から順に、速さが v₁ から v₂ に変わる</b>。速さが変わる時刻が点ごとにずれるので、列は境界のところで折れる。');
-  note(ctx.controls, '右＝同じ状況を2次元波動方程式で数値計算したもの（上半分と下半分で速さだけが違う）。<b>左右は同じ λ₁・λ₂・同じ T・同じ入射角</b>で動かしていて、境界の高さも同じ。<b>境界では屈折波だけでなく反射波も出る</b>。右のタンクは場を1ステップずつ積み上げるので、時間を巻き戻すことはできない（◀ は使えない）。');
   note(ctx.controls, '作図の手順（素元波から屈折波面をつくる）は「16 屈折の作図と全反射」タブ。');
   ui.slider(ctx.detail, { label: 'タンクの明るさ', min: 0.3, max: 3, step: 0.1, value: 1, digits: 1, onInput: v => st.gain = v });
-  note(ctx.detail, '隊列モデルは作図ではなく<b>追跡</b>：境界を x = x_c で横切るレイごとに「その点が境界に着く時刻 t_c」を出し、t ＜ t_c なら速さ v₁ で向き (sin i, −cos i)、t ＞ t_c なら速さ v₂ で向き (sin r, −cos r) として位置を計算している。列に沿った点の間隔が境界の前後で変わるのは、同じ本数のレイがつくる幅（ビームの幅）が cos i : cos r で変わるため。');
-  note(ctx.detail, '<b>左右の同調のしかた</b>：1 m ＝ N セルとして長さをセルに換算する（N は格子の大きさと λ から自動：遅い側の λ が ' + CELL_MIN + ' セル以上、かつ速い側の λ が画面に6個ほど入る値）。速い側のクーラン数（1ステップに進むセル数）を 0.5 に固定し、遅い側は v₁:v₂ の比で決める。波源の周期は λ₁ の値から逆算した<b>ステップ数</b>で、1周期がちょうど T 秒になる速さで計算を進めている。だから左右で λ も周期も一致する。');
 
   /* ---------- 共通の幾何 ---------- */
   function geom() {
@@ -842,7 +833,7 @@ function buildRefract(ctx) {
     cvA.text('媒質1　v₁ = ' + fmt(g.v1, 2) + ' m/s　λ₁ = v₁T = ' + fmt(g.lam1, 2) + ' m', V.x0 + 0.02 * (V.x1 - V.x0), V.y1, { dy: 14 * SC, align: 'left', color: C.wave1, bold: true });
     cvA.text('媒質2　v₂ = ' + fmt(g.v2, 2) + ' m/s' + (g.total ? '' : '　λ₂ = v₂T = ' + fmt(g.lam2, 2) + ' m'), V.x0 + 0.02 * (V.x1 - V.x0), V.y0, { dy: -12 * SC, align: 'left', color: C.dens, bold: true });
     if (g.total) cvA.text('屈折波なし（全反射）', 0, V.y0 * 0.5, { color: C.wave2, bold: true, size: 16 });
-    if (g.si < 1e-3) cvA.text('入射角 0°：どの点も同時に境界に着くので列は曲がらない（間隔だけ λ₁ → λ₂ に変わる）', 0, V.y1 * 0.55, { color: C.muted, size: 13 });
+    if (g.si < 1e-3) cvA.text('入射角 0°', 0, V.y1 * 0.55, { color: C.muted, size: 13 });
   }
 
   /* ---------- 右：二媒質の波動タンク ---------- */
@@ -908,7 +899,7 @@ function buildRefract(ctx) {
       F.set('v₁ = ' + fmt(g.v1, 2) + ' m/s　v₂ = ' + fmt(g.v2, 2) + ' m/s　T = ' + fmt(g.T, 1) + ' s　→　λ₁ = v₁T = <b>' + fmt(g.lam1, 2) + '</b> m　λ₂ = v₂T = <b>' + fmt(g.lam2, 2) + '</b> m'
         + '<br>i = ' + fmt(st.i, 0) + '°　sin r = (v₂/v₁) sin i = ' + fmt(g.v2 / g.v1, 3) + ' × ' + fmt(g.si, 3) + ' = ' + fmt((g.v2 / g.v1) * g.si, 3)
         + (g.total
-          ? '　＞ 1　→　<span class="bad">屈折波なし</span>（この角では媒質2に入る波面がつくれない）'
+          ? '　＞ 1　→　<span class="bad">屈折波なし</span>'
           : '　→　r = <b>' + fmt(g.rr * R2D, 1) + '</b>°'));
     },
     canStepBack: false,
@@ -937,11 +928,10 @@ function buildRefract2(ctx) {
   ui.toggle(ctx.controls, { label: "作図の長さ BB′・AT", checked: true, onChange: v => st.len = v });
   ui.toggle(ctx.controls, { label: '波面アニメーション', checked: true, onChange: v => st.anim = v });
   const F = ui.formula(ctx.controls, '');
-  note(ctx.controls, "入射波面の端 A がすでに境界に着いてから、もう一方の端 B が境界の B′ に着くまでの時間を Δt とする。その Δt の間に、<b>B は媒質1を BB′ = v₁Δt だけ進み</b>、<b>A から出た素元波は媒質2を半径 AT = v₂Δt だけ広がる</b>。直角三角形 ABB′ と ATB′ は斜辺 AB′ が共通だから、sin i = BB′/AB′・sin r = AT/AB′ となり、比をとると AB′ が消えて sin i / sin r = v₁/v₂ になる。<b>入射波面のハンドル（黄）をドラッグ</b>しても入射角を変えられる。");
+  note(ctx.controls, "Δt＝B が B′ に着くまでの時間。その間に <b>B は BB′ = v₁Δt 進み</b>、<b>A からの素元波は半径 AT = v₂Δt に広がる</b>。斜辺 AB′ が共通なので sin i / sin r = v₁/v₂。");
   ui.slider(ctx.detail, { label: '素元波の数', min: 4, max: 8, step: 1, value: 6, digits: 0, onInput: v => st.n = v });
   ui.slider(ctx.detail, { label: 'T（周期）', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
-  note(ctx.controls, '<b>v₂ ＞ v₁ のとき</b>、入射角を大きくしていくと (v₂/v₁) sin i がいずれ 1 を超え、sin r = (v₂/v₁) sin i をみたす角 r が存在しなくなる＝媒質2に入る波面がつくれない。ちょうど 1 になる入射角が<b>臨界角</b>、それより大きい角で屈折波が出ないのが<b>全反射</b>。<em>（発展：全反射は物理基礎の範囲外。4単位の「物理」や、中1の光で扱う。）</em>　「入射角を自動で動かす」で、屈折波が消える瞬間を連続で見られる。');
-  note(ctx.detail, '波面アニメーションは λ₁ = v₁T、λ₂ = v₂T の間隔で山の線を描いている。境界で山の線がつながる（位相が連続）ことに注目。');
+  note(ctx.controls, '<b>臨界角</b>：(v₂/v₁) sin i = 1 になる入射角。それより大きい角で屈折波が出ないのが<b>全反射</b>（発展：物理基礎の範囲外）。');
 
   // ジオメトリ（draw で更新）
   const G = { D: 3, A: { x: -1.5, y: 0 }, hlen: 1.5 };
@@ -1063,7 +1053,7 @@ function buildRefract2(ctx) {
         }
         if (total) cv.text('屈折波なし（全反射）', (A.x + Bp.x) / 2, V.y0 * 0.55, { color: C.wave2, bold: true, size: 17 });
       } else {
-        cv.text('入射角 0°（垂直入射）— 波面は境界に平行で、進む向きは変わらない', 0, V.y0 * 0.55, { color: C.muted, bold: true, size: 15 });
+        cv.text('入射角 0°（垂直入射）', 0, V.y0 * 0.55, { color: C.muted, bold: true, size: 15 });
       }
       cv.drawHandles();
 
@@ -1072,7 +1062,7 @@ function buildRefract2(ctx) {
       const iCrit = hasCrit ? Math.asin(clamp(v1 / v2, -1, 1)) * R2D : NaN;
       const critLine = hasCrit
         ? '<br>臨界角：sin i_c = v₁/v₂ = ' + fmt(v1, 2) + ' / ' + fmt(v2, 2) + ' = ' + fmt(v1 / v2, 3) + '　→　i_c = <b>' + fmt(iCrit, 1) + '</b>°'
-          + '　<em>（i ＞ i_c で屈折波が消える＝全反射。発展：物理基礎の範囲外）</em>'
+          + ''
         : '<br><em>v₂ ≤ v₁ なので (v₂/v₁) sin i は 1 を超えない＝どの入射角でも屈折波が出る（全反射は起きない）</em>';
       if (total) {
         F.set('sin r = (v₂/v₁) sin i = ' + fmt(v2 / v1, 2) + ' × ' + fmt(si, 3) + ' = ' + fmt(sr, 3) + ' ＞ 1'
@@ -1120,11 +1110,9 @@ function buildDiffract(ctx) {
   ui.slider(ctx.controls, { label: '明るさ', min: 1, max: 6, step: 0.1, value: 2.2, digits: 1, onInput: v => st.gain = v });
   const RL = ui.readout(ctx.controls, { label: 'λ = vT', value: '' });
   const RO = ui.readout(ctx.controls, { label: 'w / λ', value: '' });
-  note(ctx.controls, '<b>作図＝手順（「13 素元波」タブ）／タンク＝現象（このタブ）</b>。スリットが波長に比べて狭い（w ≲ λ）ほど、波はスリットの後ろへ大きく回り込む。');
-  note(ctx.controls, '<b>波長 λ は直接は決められない。</b>決められるのは波源の周期 T（＝振動数 f = 1/T）と媒質で決まる速さ v で、λ = vT はその結果。<b>T を固定したまま v を変えると、f はそのままで λ だけが変わる</b>（波源の振動が速さを決めるのではない）。');
-  note(ctx.controls, '<b>1セル＝格子の1目盛り</b>。実際の長さではなく、λ とスリット幅 w の<b>比</b>だけが現象を決める。');
-  note(ctx.controls, 'このタブは各時刻の場を1ステップずつ積み上げて計算しているので、<b>時間を巻き戻すことはできない</b>（◀ は使えない。停止・再開・スロー・リセット・▶ のみ）。');
-  note(ctx.detail, '2次元波動方程式 ∂²u/∂t² = c²∇²u を差分法で解いている。スライダーの「速さ v」は差分法のクーラン数 s = v·dt/dx そのもの（dx = 1セル、dt = 1ステップ）。この解き方が安定なのは s ≤ 1/√2 ≒ 0.71 のときなので、上限を 0.5 にしてある。画面の端は吸収層（反射させない）。障壁は変位 0 の固い壁。');
+  note(ctx.controls, '<b>λ は直接は決められない</b>：波源が T（f = 1/T）を、媒質が v を決め、λ = vT はその結果。');
+  note(ctx.controls, '1セル＝格子の1目盛り。');
+  note(ctx.detail, '2次元波動方程式 ∂²u/∂t² = c²∇²u を差分法で解いたもの。');
 
   // --- 格子 ---
   let nx = 0, ny = 0, u, up, un, wall, sig, off, offg, img, step = 0, acc = 0, phase = 0, lastT = 0;
@@ -1263,7 +1251,7 @@ function buildDiffract(ctx) {
    ========================================================= */
 function buildInterfere(ctx) {
   ctx.stage.classList.add('stageIF');
-  const cv = ctx.canvas({ title: '2点波源の干渉（上から見た水面）— P はドラッグできます' });
+  const cv = ctx.canvas({ title: '2点波源の干渉（上から見た水面）' });
   const cvP = ctx.canvas({ title: '点 P の y-t グラフ（P の水面の上下動）' });
   const st = { d: 3, lam: 2, T: 2, anti: false, lines: true, circles: false, gain: 1 };
   const P = { x: 2.4, y: 1.6 };
@@ -1277,10 +1265,8 @@ function buildInterfere(ctx) {
   ui.slider(ctx.controls, { label: 'T', min: 0.5, max: 4, step: 0.1, value: 2, unit: 's', digits: 1, onInput: v => st.T = v });
   const F = ui.formula(ctx.controls, '');
   ui.legend(ctx.controls, [[C.anti, '水色の実線＝経路差 mλ の点'], [C.yellow, '黄の破線＝経路差 (m+½)λ の点']]);
-  note(ctx.controls, '<b>実線同士／破線同士の交点は、山と山・谷と谷が同時に来る点</b>（経路差 = mλ）。<b>実線と破線の交点は、一方の山ともう一方の谷が同時に来る点</b>（経路差 = (m+½)λ）。前者は右の y-t グラフで振幅 2A の大きな振動になり、後者はほとんど動かない。色は定在波タブと同じ意味で、<b style="color:var(--cyan)">水色＝大きく動く</b>・<b style="color:var(--yellow)">黄＝ほとんど動かない</b>。');
-  note(ctx.controls, '<b>逆位相</b>にすると、S₂ は S₁ が山を出す瞬間に谷を出す。そのため経路差 0 の点でも山と谷が重なり、2本の線の役割が入れかわる。');
   ui.slider(ctx.detail, { label: '明るさ', min: 0.5, max: 2.5, step: 0.1, value: 1, digits: 1, onInput: v => st.gain = v });
-  note(ctx.detail, 'y(x,y,t) = A sin2π(t/T − r₁/λ) + A sin(2π(t/T − r₂/λ) + φ) を各点で計算して濃淡で表示（振幅の減衰は考えない）。右の y-t グラフはこの式に P の座標を入れ、時刻 t の関数として描いたもの。だから P をドラッグすると波形がその場で描き直される。');
+  note(ctx.detail, 'y(x,y,t) = A sin2π(t/T − r₁/λ) + A sin(2π(t/T − r₂/λ) + φ) を各点で計算して濃淡で表示。');
 
   cv.addHandle({ get: () => P, set: (x, y) => { P.x = x; P.y = y; }, color: C.yellow, label: 'P', r: 26, size: 8 });
 

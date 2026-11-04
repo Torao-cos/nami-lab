@@ -62,10 +62,9 @@ Nami.init({
         sliders(c);
         ui.sep(c);
         ui.toggle(c, { label: '射線を表示', checked: true, onChange: v => st.rays = v });
-        ui.note(c, '波面＝同じ振動状態（ここでは山）の点を結んだ線。射線＝波の進む向きを示す線で、波面に垂直。上段の平面波は左から右へ、下段の球面波は中心から広がる。右のグラフは破線に沿って水面を切った断面。');
+        ui.note(c, '波面＝同じ振動状態（ここでは山）の点を結んだ線。射線＝波の進む向きを示す線（波面に垂直）。');
         ui.toggle(ctx.detail, { label: '谷の波面（破線）も表示', checked: false, onChange: v => st.trough = v });
         ui.toggle(ctx.detail, { label: '球面波の振幅の減衰（1/√r）を入れる', checked: false, onChange: v => st.decay = v });
-        ui.note(ctx.detail, '教科書の図では球面波の振幅は一定として描く。実際の水面波はエネルギーが広がるため遠くほど振幅が小さくなる（2次元では 1/√r）。');
         const ampS = r => st.decay ? S.A * Math.min(1, Math.sqrt((S.L / 2) / Math.max(r, 1e-6))) : S.A;
         function crests(t) { // 山の位置（位相 t/T − x/λ = 1/4 + k → x = base − kλ）。画面範囲 [0, XW+λ] を全て列挙
           const out = []; const base = S.L * (t / S.T - 0.25); const xmax = Math.max(XW, RW) + S.L;
@@ -133,7 +132,6 @@ Nami.init({
         ui.sep(c);
         const ro = ui.readout(c, { label: '現在' });
         const fo = ui.formula(c, '');
-        ui.note(c, '半径 A の円周上を周期 T で等速円運動する点を、真横（鉛直な直線上）に射影すると、射影点は単振動する。その変位 y を時間 t に対して記録すると正弦波（y-t グラフ）になる。y = A sin θ, θ = 2πt/T。');
         ui.toggle(ctx.detail, { label: '波として伝わる様子を表示（x=0 の媒質が射影点）', checked: false, onChange: v => { detailWrap.hidden = !v; if (v) sl.L.box.hidden = false; } });
         ui.toggle(ctx.detail, { label: '位相角 θ の弧を表示', checked: true, onChange: v => st.showArc = v });
         ui.toggle(ctx.detail, { label: 'この先の y-t（未来）を薄く表示', checked: false, onChange: v => st.future = v });
@@ -211,7 +209,7 @@ Nami.init({
         ui.sep(c);
         ui.toggle(c, { label: '定規', checked: true, onChange: v => { st.showRuler = v; cv.handles[1].hidden = !v; } });
         const fo = ui.formula(c, '');
-        ui.note(c, '波長 λ＝となり合う山と山の距離。振幅 A＝つり合いの位置からの最大のずれ。周期 T＝媒質が1回振動する時間＝山が λ だけ進む時間。振動数 f＝1秒間の振動の回数＝1秒間に P を通過する山の数。速さ v＝山が進む速さ。');
+        ui.note(c, '周期 T＝媒質が1回振動する時間。振動数 f＝1秒間の振動の回数。');
         ui.select(ctx.detail, { label: '定規の長さ', options: [['1', '1 m'], ['2', '2 m'], ['3', '3 m'], ['5', '5 m']], value: '3', onChange: v => { st.ruler.len = parseFloat(v); } });
         ui.toggle(ctx.detail, { label: '山の位置に印', checked: true, onChange: v => st.showCrest = v });
         const yOf = (x, t) => S.A * Math.sin(TAU * (t / S.T - x / S.L));

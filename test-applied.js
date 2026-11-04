@@ -223,7 +223,12 @@ function check(name, ok, detail = '') {
   check('波動タンク: 屈折波が媒質2に届く', tank1.med2 > 0.25 * tank1.med1,
     `med1=${tank1.med1.toFixed(3)} med2=${tank1.med2.toFixed(3)} (格子 ${tank1.nx}×${tank1.ny})`);
   // 左（隊列モデル）と右（タンク）の同調: λ の比・画面の横幅・境界に沿う見かけの波長（＝屈折角）
-  const sync = await page.evaluate(() => window.__nami_debug.refractSync());
+  // 見かけの波長は瞬間の場の零交差から測るので、位相によって端の効果で数%ぶれる（格子の縦横比＝画面レイアウトで変わる）。
+  // 数コマ取り、その中央値で判定する。
+  const syncs = [];
+  for (let k = 0; k < 5; k++) { syncs.push(await page.evaluate(() => window.__nami_debug.refractSync())); await page.waitForTimeout(230); }
+  const med = a => a.slice().sort((p, q) => p - q)[a.length >> 1];
+  const sync = Object.assign({}, syncs[0], { lamX1: med(syncs.map(x => x.lamX1)), lamX2: med(syncs.map(x => x.lamX2)) });
   check('15 屈折: タンクの λ₁:λ₂（セル）＝ 隊列モデルの λ₁:λ₂（m）＝ v₁:v₂',
     Math.abs(sync.lam1cell / sync.lam2cell - sync.lam1m / sync.lam2m) < 1e-9 && Math.abs(sync.lam1cell / sync.lam2cell - 1.5) < 1e-9,
     `λ₁=${sync.lam1m} m=${sync.lam1cell.toFixed(1)} セル／λ₂=${sync.lam2m} m=${sync.lam2cell.toFixed(1)} セル（1 m = ${sync.N.toFixed(1)} セル）`);
