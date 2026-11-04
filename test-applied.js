@@ -40,9 +40,9 @@ function check(name, ok, detail = '') {
   await page.goto(U + '#huygens');
   await page.waitForTimeout(1500);
   check('#huygens に直行（タブが選択される）', await page.evaluate(() => document.querySelectorAll('nav.tabs button')[0].classList.contains('active')));
-  check('タブ6つ', await page.locator('nav.tabs button').count() === 6);
+  check('タブ7つ', await page.locator('nav.tabs button').count() === 7);
   const labels = await page.evaluate(() => [...document.querySelectorAll('nav.tabs button')].map(b => b.textContent));
-  check('タブ名が 13/14/15/16/17/18', JSON.stringify(labels) === JSON.stringify(['13 素元波', '14 反射', '15 屈折', '16 屈折の作図と全反射', '17 回折（波動タンク）', '18 干渉']), JSON.stringify(labels));
+  check('タブ名が 13〜19', JSON.stringify(labels) === JSON.stringify(['13 素元波', '14 反射', '15 屈折', '16 屈折の作図と全反射', '17 回折（波動タンク）', '18 干渉', '19 音の干渉（クインケ管）']), JSON.stringify(labels));
   const fpsH = await fps();
   await shot(page, 'app-huygens-1280.png');
   check('素元波 fps', fpsH >= 30, fpsH + ' fps');

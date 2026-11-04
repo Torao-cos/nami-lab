@@ -17,6 +17,35 @@
   html[data-mode=proj] .panel{min-height:345px}
   html[data-mode=proj] .panel canvas{min-height:295px}
   @media (max-width:760px){ html[data-mode=proj] .panel{min-height:260px} }
+  /* 19 音の干渉（クインケ管）: 管の図（左・縦長）＋ B の y-t ＋ 振幅−d（右 2 段） */
+  .stage.qk{grid-template-columns:minmax(0,1.45fr) minmax(0,1fr);grid-template-areas:"pipe rec" "pipe amp"}
+  .stage.qk .panel.pipe{grid-area:pipe;min-height:560px}
+  .stage.qk .panel.rec{grid-area:rec;min-height:272px}
+  .stage.qk .panel.amp{grid-area:amp;min-height:272px}
+  .stage.qk.hasMax{grid-template-areas:none}
+  .stage.qk.hasMax .panel{grid-area:auto}
+  .controls .ctlLabel.hdr{font-weight:900;color:var(--text)}
+  .controls .note.reason{color:var(--text);opacity:.92;line-height:1.6;font-size:.9rem}
+  .controls .note.reason b{font-weight:800}
+  .controls .btnMini{padding:.35rem .6rem;font-size:.88rem}
+  .controls .ro{display:flex;flex-wrap:wrap;gap:.25rem 1.1rem;flex-basis:100%;font-variant-numeric:tabular-nums}
+  .controls .ro span{white-space:nowrap}
+  .controls .ro b{color:var(--yellow)}
+  .meter{display:inline-block;width:190px;max-width:48vw;height:1rem;border:1px solid var(--line);border-radius:5px;background:var(--bg);overflow:hidden;vertical-align:middle}
+  .meter > div{height:100%;width:0;background:var(--green)}
+  button.stopSnd{border-color:var(--red);color:var(--red);font-weight:800}
+  html[data-mode=proj] .controls .note.reason{opacity:1;font-size:.95rem}
+  html[data-mode=proj] .stage.qk .panel.pipe{min-height:640px}
+  html[data-mode=proj] .stage.qk .panel.rec,html[data-mode=proj] .stage.qk .panel.amp{min-height:312px}
+  html[data-mode=proj] .meter{border-width:2px;border-color:var(--text)}
+  @media (max-width:760px){
+    .stage.qk{grid-template-columns:1fr;grid-template-areas:"pipe" "rec" "amp"}
+    .stage.qk .panel.pipe{min-height:430px}
+    .stage.qk .panel.rec,.stage.qk .panel.amp{min-height:230px}
+    html[data-mode=proj] .stage.qk .panel.pipe{min-height:470px}
+    html[data-mode=proj] .stage.qk .panel.rec,html[data-mode=proj] .stage.qk .panel.amp{min-height:260px}
+  }
+  html[data-mode=proj] .stage.qk .panel canvas{min-height:160px}
 </style>
 </head><body>
 <script src="common.js"></script>
@@ -1395,6 +1424,384 @@ function buildInterfere(ctx) {
 
 /* ========================================================= */
 // 周期は各タブの api.period()（build 後に決まる）を参照する
+/* ===================== 19 音の干渉（クインケ管）=====================
+   名前の衝突を避けるため 1 つの関数に閉じる。外へ出すのは build / period / stopSound だけ。デバッグは window.__qk */
+const QK = (() => {
+const { C, TAU, ui, fmt, clamp, PROJ, SC, mathHTML, niceStep } = Nami;
+const S = v => v * SC;
+
+/* ===================== 管の形（単位 cm・上から見た図） =====================
+   スピーカー →(入口管)→ A ─┬─ 経路1（上・固定）──┐
+                              └─ 経路2（下・U 字管を d 引き出す）┘→ B →(出口管)→ 耳
+   d = 0 で L₁ = L₂（上下対称）。U 字管を d 引き出すと、左右の脚がそれぞれ d 伸びる → L₂ = L₁ + 2d */
+const G = { Lin: 24, W: 30, h: 12, r: 5, Lout: 20, tw: 3.4, dMax: 30 };
+
+function makePath(pieces) {
+  let L = 0;
+  pieces.forEach(p => { p.s0 = L; p.len = p.type === 'L' ? Math.hypot(p.x1 - p.x0, p.y1 - p.y0) : Math.abs(p.a1 - p.a0) * p.r; L += p.len; });
+  function at(s) {
+    s = clamp(s, 0, L);
+    let p = pieces[pieces.length - 1];
+    for (const q of pieces) if (s <= q.s0 + q.len) { p = q; break; }
+    const u = p.len > 0 ? (s - p.s0) / p.len : 0;
+    if (p.type === 'L') { const dx = p.x1 - p.x0, dy = p.y1 - p.y0, n = Math.hypot(dx, dy) || 1; return { x: p.x0 + dx * u, y: p.y0 + dy * u, tx: dx / n, ty: dy / n }; }
+    const a = p.a0 + (p.a1 - p.a0) * u, sg = Math.sign(p.a1 - p.a0);
+    return { x: p.cx + p.r * Math.cos(a), y: p.cy + p.r * Math.sin(a), tx: -Math.sin(a) * sg, ty: Math.cos(a) * sg };
+  }
+  return { L, at, pieces };
+}
+let pathIn = makePath([{ type: 'L', x0: -G.Lin, y0: 0, x1: 0, y1: 0 }]);
+let pathOut = makePath([{ type: 'L', x0: G.W, y0: 0, x1: G.W + G.Lout, y1: 0 }]);
+function makeLoop(sign, d) { // sign=+1 上（経路1）, -1 下（経路2・d 引き出し）
+  const H = G.h + d, r = G.r, W = G.W, k = sign;
+  return makePath([
+    { type: 'L', x0: 0, y0: 0, x1: 0, y1: k * (H - r) },
+    { type: 'A', cx: r, cy: k * (H - r), r, a0: Math.PI, a1: k > 0 ? Math.PI / 2 : Math.PI * 1.5 },
+    { type: 'L', x0: r, y0: k * H, x1: W - r, y1: k * H },
+    { type: 'A', cx: W - r, cy: k * (H - r), r, a0: k > 0 ? Math.PI / 2 : Math.PI * 1.5, a1: k > 0 ? 0 : TAU },
+    { type: 'L', x0: W, y0: k * (H - r), x1: W, y1: 0 }
+  ]);
+}
+const path1 = makeLoop(+1, 0);
+
+/* ===================== 状態 ===================== */
+const st = { f: 1000, v: 340, d: 0, Tanim: 2 };
+const lam = () => st.v / st.f * 100;               // λ [cm]
+const L1 = () => path1.L;
+const L2 = () => path1.L + 2 * st.d;
+const dL = () => L2() - L1();
+const ratio = () => Math.abs(Math.cos(Math.PI * dL() / lam())); // 合成振幅 / 2a
+
+/* 振幅-d の記録（0.1 cm ごと。NaN＝訪れていない） */
+const NB = Math.round(G.dMax / 0.1);
+let rec = new Float64Array(NB + 1).fill(NaN);
+const ampAt = d => Math.abs(Math.cos(Math.PI * 2 * d / lam()));
+function recordRange(a, b) { const i0 = Math.round(Math.min(a, b) / 0.1), i1 = Math.round(Math.max(a, b) / 0.1); for (let i = i0; i <= i1; i++) rec[i] = ampAt(i * 0.1); }
+function clearRec() { rec.fill(NaN); recordRange(st.d, st.d); }
+
+/* ===================== 音（計算した B の振幅で鳴らす・既定 OFF） ===================== */
+const snd = { ac: null, osc: null, gain: null, on: false, vol: 0.2, lastG: -1 };
+function sndTarget() { return snd.vol * 0.5 * ratio(); }
+function sndRamp(gv) {
+  if (!snd.gain) return; const now = snd.ac.currentTime, g = snd.gain.gain;
+  g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(gv, now + 0.02);
+}
+function sndStart() {
+  try {
+    if (!snd.ac) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return false; snd.ac = new AC(); }
+    if (snd.ac.state === 'suspended') snd.ac.resume();
+    if (!snd.osc) {
+      snd.osc = snd.ac.createOscillator(); snd.osc.type = 'sine'; snd.osc.frequency.value = st.f;
+      snd.gain = snd.ac.createGain(); snd.gain.gain.value = 0;
+      snd.osc.connect(snd.gain); snd.gain.connect(snd.ac.destination); snd.osc.start();
+    }
+    snd.on = true; snd.lastG = -1; sndRamp(sndTarget()); return true;
+  } catch (e) { return false; }
+}
+function sndStop() {
+  snd.on = false;
+  if (snd.osc) { const o = snd.osc, gn = snd.gain; sndRamp(0); try { o.stop(snd.ac.currentTime + 0.03); } catch (_) { } setTimeout(() => { try { o.disconnect(); gn.disconnect(); } catch (_) { } }, 80); snd.osc = null; snd.gain = null; }
+}
+function sndUpdate() {
+  if (!snd.on || !snd.osc) return;
+  const gv = sndTarget(); if (Math.abs(gv - snd.lastG) > 1e-4) { sndRamp(gv); snd.lastG = gv; }
+  if (Math.abs(snd.osc.frequency.value - st.f) > 0.01) snd.osc.frequency.setTargetAtTime(st.f, snd.ac.currentTime, 0.01);
+}
+
+/* ===================== タブ本体 ===================== */
+function buildQuincke(ctx) {
+  ctx.stage.classList.add('qk');
+  const cvP = ctx.canvas({ title: 'クインケ管（上から見た図）', className: 'pipe' });
+  const cvR = ctx.canvas({ title: 'B に届く波の y-t（青破線＝経路1から・赤破線＝経路2から・緑＝合成）', className: 'rec' });
+  const cvA = ctx.canvas({ title: 'B での振幅 − d', className: 'amp' });
+  cvP.setPad({ l: 6, r: 6, t: 6, b: 6 });
+  cvR.setPad({ l: 44, r: 14, t: 14, b: 30 });
+  cvA.setPad({ l: 44, r: 14, t: 16, b: 32 });
+
+  const tog = {};
+  /* ---- 操作 ---- */
+  const cl = ctx.controls;
+  const fS = ui.slider(cl, { label: '振動数 f', min: 300, max: 3000, step: 10, value: st.f, fmt: x => fmt(x, 0) + ' Hz', onInput: x => { st.f = x; clearRec(); } });
+  const dS = ui.slider(cl, { label: '引き出す長さ d', min: 0, max: G.dMax, step: 0.1, value: 0, fmt: x => fmt(x, 1) + ' cm', onInput: x => { stopAuto(); setD(x); } });
+  const autoBtn = ui.button(dS.box, { label: '自動で引き出す', className: 'btnMini', onClick: () => (auto.on ? stopAuto() : startAuto()) });
+  autoBtn.title = 'd を 0 から最大までゆっくり動かす';
+  ui.button(dS.box, { label: 'グラフを消す', className: 'btnMini', onClick: () => clearRec() });
+  ui.sep(cl);
+  tog.p1 = ui.toggle(cl, { label: '経路1の音', checked: true });
+  tog.p2 = ui.toggle(cl, { label: '経路2の音', checked: true });
+  tog.mk = ui.toggle(cl, { label: '密の位置の目盛り', checked: true });
+  tog.ar = ui.toggle(cl, { label: '伸びた長さの矢印', checked: true });
+
+  /* 読み出し */
+  const roBox = document.createElement('div'); roBox.className = 'ro'; cl.appendChild(roBox);
+  const meterG = ui.group(cl, 'B での合成振幅'); const meter = document.createElement('span'); meter.className = 'meter'; const bar = document.createElement('div'); meter.appendChild(bar); meterG.appendChild(meter);
+  const meterV = document.createElement('span'); meterV.className = 'readout'; meterG.appendChild(meterV);
+
+  /* 音 */
+  ui.sep(cl);
+  const sG = ui.group(cl);
+  const sT = ui.toggle(sG, { label: '音を鳴らす', checked: false, onChange: on => { if (on) { if (!sndStart()) sT.set(false, true); } else sndStop(); } });
+  const volS = ui.slider(cl, { label: '音量', min: 0, max: 100, step: 1, value: 20, fmt: x => fmt(x, 0) + ' %', onInput: x => { snd.vol = x / 100; snd.lastG = -1; } });
+  ui.button(volS.box, { label: '■ 音を止める', className: 'btnMini stopSnd', onClick: () => { sT.set(false); } });
+
+
+  /* 詳しく */
+  const dt = ctx.detail;
+  ui.slider(dt, { label: '音速 v', min: 330, max: 350, step: 1, value: st.v, fmt: x => fmt(x, 0) + ' m/s', onInput: x => { st.v = x; clearRec(); } });
+  ui.select(dt, { label: 'スローモーション', value: '2', options: [['1', '1 周期を 1 秒で'], ['2', '1 周期を 2 秒で'], ['4', '1 周期を 4 秒で']], onChange: v => { st.Tanim = parseFloat(v); } });
+  ui.note(dt, '式で書くと: B で経路1から届く波 y₁ = a sin 2π(t/T − L₁/λ)、経路2から届く波 y₂ = a sin 2π(t/T − L₂/λ)。重ね合わせ y = y₁ + y₂ = 2a cos(πΔL/λ) · sin 2π(t/T − (L₁ + L₂)/(2λ))。だから B での合成振幅は 2a|cos(πΔL/λ)|。').classList.add('reason');
+  ui.note(dt, 'y-t の y は B での空気の変位（管に沿った向き）。');
+
+  dbg._setD = x => setD(x);
+  dbg._setF = x => fS.set(x);
+  function setD(x, jump) { const nd = clamp(x, 0, G.dMax); if (!jump) recordRange(st.d, nd); st.d = nd; if (jump) recordRange(nd, nd); dS.set(nd, true); }
+
+  /* 自動スイープ（実時間で 2.5 cm/s） */
+  const auto = { on: false, last: 0 };
+  function startAuto() { auto.on = true; auto.last = performance.now(); setD(0, true); autoBtn.textContent = '止める'; autoBtn.classList.add('active'); }
+  function stopAuto() { if (!auto.on) return; auto.on = false; autoBtn.textContent = '自動で引き出す'; autoBtn.classList.remove('active'); }
+
+  /* ---- U 字管のドラッグ（底の横管ぜんたい＋取っ手がつかめる） ---- */
+  let grabOff = 0;
+  const slideY = () => -(G.h + st.d);
+  for (let x = 1; x <= G.W - 1 + 1e-9; x += 2.5) {
+    cvP.addHandle({ get: () => ({ x, y: slideY() }), r: 30,
+      onStart: p => { stopAuto(); grabOff = cvP.wy(p.y) - slideY(); },
+      set: (wx, wy) => { setD(-(wy - grabOff) - G.h); } });
+  }
+  // 取っ手（U の下）
+  cvP.addHandle({ get: () => ({ x: G.W / 2, y: slideY() - G.tw / 2 - 3.2 }), r: 36,
+    onStart: p => { stopAuto(); grabOff = cvP.wy(p.y) - slideY(); },
+    set: (wx, wy) => { setD(-(wy - grabOff) - G.h); } });
+
+  /* ---- ルーラー／描画ヘルパ ---- */
+  const g = cvP.ctx;
+  let TS = 1; // 狭い画面では図中の文字を小さく
+  const tx = (str, x, y, o = {}) => cvP.text(str, x, y, Object.assign({}, o, { size: (o.size || 13) * TS }));
+  function strokePath(P, widthPx, color, alpha) {
+    g.save(); g.strokeStyle = color; g.globalAlpha = alpha == null ? 1 : alpha; g.lineWidth = widthPx; g.lineCap = 'butt'; g.lineJoin = 'round';
+    g.beginPath();
+    for (const p of P.pieces) {
+      if (p.type === 'L') { if (p === P.pieces[0]) g.moveTo(cvP.px(p.x0), cvP.py(p.y0)); g.lineTo(cvP.px(p.x1), cvP.py(p.y1)); }
+      else { const n = Math.max(6, Math.ceil(p.len * cvP.sx / 4)); for (let i = 0; i <= n; i++) { const a = p.a0 + (p.a1 - p.a0) * i / n; g.lineTo(cvP.px(p.cx + p.r * Math.cos(a)), cvP.py(p.cy + p.r * Math.sin(a))); } }
+    }
+    g.stroke(); g.restore();
+  }
+  /* 管の中を濃淡で塗る: val(s) ∈ [-1,1] */
+  function shadePath(P, val) {
+    const twPx = G.tw * cvP.sx, ds = Math.max(0.15, 1.6 / cvP.sx);
+    g.save(); g.lineCap = 'butt'; g.lineWidth = twPx;
+    for (let s = 0; s < P.L; s += ds) {
+      const a = P.at(s), b = P.at(Math.min(P.L, s + ds * 1.7));
+      const c = C.shade(val(s + ds / 2));
+      g.strokeStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+      g.beginPath(); g.moveTo(cvP.px(a.x), cvP.py(a.y)); g.lineTo(cvP.px(b.x), cvP.py(b.y)); g.stroke();
+    }
+    g.restore();
+  }
+  function markAt(P, s, alpha) {
+    const p = P.at(s), nx = -p.ty, ny = p.tx, hw = G.tw / 2;
+    cvP.linePx(cvP.px(p.x - nx * hw), cvP.py(p.y - ny * hw), cvP.px(p.x + nx * hw), cvP.py(p.y + ny * hw), { color: PROJ ? '#000' : '#ffffff', width: 2.2, alpha: alpha == null ? 0.95 : alpha });
+  }
+  /* 密の位置（位相 φ0 − sTot/λ が整数）: sTot = s0 + s, s∈[0,L] */
+  function marks(P, s0, phi0, shift, alpha) {
+    const l = lam();
+    const nMin = Math.ceil(phi0 - shift - (s0 + P.L) / l - 1e-9), nMax = Math.floor(phi0 - shift - s0 / l + 1e-9);
+    for (let n = nMin; n <= nMax; n++) { const s = l * (phi0 - shift - n) - s0; if (s >= 0 && s <= P.L) markAt(P, s, alpha); }
+  }
+
+  function drawSpeaker() {
+    const x = -G.Lin, hw = G.tw / 2;
+    const pts = [[x, hw], [x - 3, hw + 3.2], [x - 3, -hw - 3.2], [x, -hw]].map(([a, b]) => ({ x: a, y: b }));
+    cvP.plotPts(pts, { close: true, fill: PROJ ? '#cfd6d2' : '#2a3a32', color: C.text, width: 1.8 });
+    g.save(); g.fillStyle = PROJ ? '#333' : '#556b60'; g.fillRect(cvP.px(x - 6), cvP.py(hw + 1.2), (3) * cvP.sx, (G.tw + 2.4) * cvP.sx); g.restore();
+    tx('スピーカー', x - 3, -hw - 5.5, { color: C.text, bold: true, size: 13 });
+  }
+  function drawEar() {
+    const x = G.W + G.Lout + 1.4;
+    cvP.circle(x + 1.6, 0, 2.4, { color: C.text, width: 2, fill: PROJ ? '#f2e2d2' : '#3a2f28' });
+    tx('耳（マイク）', x + 1, -G.tw / 2 - 5.5, { color: C.text, bold: true, size: 13 });
+  }
+  function drawRuler() { // 右脚の外側に d の目盛り（0 = 押し込んだ位置）
+    const x = G.W + 9.5, y0 = -(G.h), y1 = -(G.h + G.dMax);
+    cvP.line(x, y0, x, y1, { color: C.muted, width: 1.5 });
+    for (let k = 0; k <= G.dMax; k++) {
+      const y = y0 - k, big = k % 5 === 0;
+      cvP.line(x, y, x + (big ? 2.2 : 1.1), y, { color: C.muted, width: big ? 1.6 : 1 });
+      if (big && (k % 10 === 0 || cvP.sx > 5.5)) tx(String(k), x + 3.4, y, { color: C.muted, size: 11, align: 'left', bg: false });
+    }
+    tx('d [cm]', x + 1.5, y1 - 2.4, { color: C.muted, size: 12, bold: true, bg: false });
+    // ΔL = 2d の目盛り（λ/2 の整数倍ごと・λ の整数倍は太く）: d = nλ/4
+    { const xL = x + 8, l = lam(), stepPx = l / 4 * cvP.sx, lblPx = 14 * TS;
+      let every = 1; while (stepPx * every < 4) every++;            // 線どうし 4px 以上
+      if (every > 1 && every % 2) every++;                            // 間引く時は λ の整数倍だけ残す
+      const halfLbl = stepPx >= lblPx, intEvery = Math.max(1, Math.ceil(lblPx / (2 * stepPx)));
+      cvP.line(xL, y0, xL, y1, { color: C.text, width: 1.5 });
+      const ticks = [];
+      for (let n = every; n * l / 4 <= G.dMax + 1e-9; n += every) {
+        const dd = n * l / 4, y = y0 - dd, major = n % 2 === 0, m = n / 2;
+        cvP.line(xL, y, xL + (major ? 2.4 : 1.3), y, { color: C.text, width: major ? 2.6 : 1.2 });
+        let lb = '';
+        if (major) { if (m % intEvery === 0) lb = (m === 1 ? '' : String(m)) + 'λ'; }
+        else if (halfLbl) lb = (n === 1 ? '' : String(n)) + 'λ/2';
+        if (lb) tx(lb, xL + 3.4, y, { color: C.text, size: major ? 12 : 11, bold: major, align: 'left', bg: false });
+        ticks.push({ n, d: dd, major, label: lb, py: cvP.py(y) });
+      }
+      tx('ΔL', xL + 2.5, y1 - 2.4, { color: C.text, size: 13, bold: true, bg: false });
+      dbg.dlTicks = ticks; dbg.dlAxisX = xL; }
+    // 現在の d
+    const yc = y0 - st.d;
+    cvP.line(G.W + G.tw / 2 + 0.6, yc, x + 2.4, yc, { color: C.yellow, width: 1.6, dash: [4, 3] });
+    cvP.arrowPx(cvP.px(x - 2.8), cvP.py(yc), cvP.px(x - 0.2), cvP.py(yc), { color: C.yellow, width: 2 });
+  }
+  function drawSleeves() { // スライドの外管（固定）: 下側の脚の上部
+    const hw = G.tw / 2 + 0.8, ya = -1.6, yb = -(G.h - G.r) + 0.4;
+    [0, G.W].forEach(x => {
+      g.save(); g.strokeStyle = PROJ ? '#000' : C.guide; g.lineWidth = S(2); g.globalAlpha = PROJ ? 1 : 0.85;
+      g.strokeRect(cvP.px(x - hw), cvP.py(ya), 2 * hw * cvP.sx, (ya - yb) * cvP.sx); g.restore();
+    });
+  }
+  function drawExtArrows() {
+    const d = st.d; if (d < 0.6) return;
+    const yTop = -(G.h - G.r), yBot = yTop - d;
+    [[-G.tw / 2 - 2.2, 'right'], [G.W + G.tw / 2 + 2.2, 'left']].forEach(([x, side]) => {
+      cvP.arrow(x, yTop, x, yBot, { color: C.yellow, width: 2.2 }); cvP.arrow(x, yBot, x, yTop, { color: C.yellow, width: 2.2 });
+      const lx = side === 'right' ? x - 1.2 : x + 1.2;
+      tx('d', lx, (yTop + yBot) / 2, { color: C.yellow, bold: true, size: 15, align: side === 'right' ? 'right' : 'left' });
+    });
+    tx('のび d ＋ d ＝ 2d', G.W / 2, -(G.h - G.r) - Math.max(1.5, d / 2) - 0.2, { color: C.yellow, bold: true, size: 13 });
+  }
+
+  dbg.handlePx = () => { const r = cvP.el.getBoundingClientRect(); return { x: r.left + cvP.px(G.W / 2), y: r.top + cvP.py(slideY() - G.tw / 2 - 3.2) }; };
+
+  let lastReal = performance.now(), roKey = '';
+  function updateReadouts() {
+    const key = [st.f, st.v, st.d].join(',');
+    if (key === roKey) return; roKey = key;
+    const l = lam(), q = dL() / l, a = ratio();
+    roBox.innerHTML = mathHTML(
+      `<span>L₁ = <b>${fmt(L1(), 1)}</b> cm</span><span>L₂ = <b>${fmt(L2(), 1)}</b> cm</span>` +
+      `<span>経路差 ΔL = L₂ − L₁ = 2d = <b>${fmt(dL(), 1)}</b> cm</span>` +
+      `<span>λ = v/f = <b>${fmt(l, 1)}</b> cm</span>` +
+      `<span>ΔL/λ = <b>${fmt(q, 2)}</b></span>`);
+    bar.style.width = (a * 100).toFixed(1) + '%';
+    meterV.innerHTML = mathHTML(fmt(a, 2) + ' × 2a');
+  }
+
+  return {
+    onShow() { cvP.resize(); },
+    draw(t) {
+      const now = performance.now(), dtr = Math.min(0.1, (now - lastReal) / 1000); lastReal = now;
+      if (auto.on) { const nd = st.d + 2.5 * dtr; if (nd >= G.dMax) { setD(G.dMax); stopAuto(); } else setD(nd); }
+      updateReadouts(); sndUpdate();
+      const l = lam(), phi0 = t / st.Tanim;
+      /* 狭い画面（スマホ縦）では入口管・出口管を短く描いて図を大きくする（共通の長さなので干渉には影響しない） */
+      const narrow = cvP.w < 640; TS = narrow ? 0.8 : 1;
+      const lin = narrow ? 10 : 24, lout = narrow ? 9 : 20;
+      if (lin !== G.Lin || lout !== G.Lout) { G.Lin = lin; G.Lout = lout; pathIn = makePath([{ type: 'L', x0: -G.Lin, y0: 0, x1: 0, y1: 0 }]); pathOut = makePath([{ type: 'L', x0: G.W, y0: 0, x1: G.W + G.Lout, y1: 0 }]); }
+      const path2 = makeLoop(-1, st.d);
+      dbg.path2L = path2.L;
+      /* ===== 管の図 ===== */
+      const bx0 = -G.Lin - 8, bx1 = Math.max(G.W + G.Lout + 9, G.W + 27), by0 = -(G.h + G.dMax) - 3.5, by1 = G.h + 7;
+      cvP.clear();
+      { const iw = Math.max(1, cvP.iw), ih = Math.max(1, cvP.ih); const sc = Math.min(iw / (bx1 - bx0), ih / (by1 - by0)); const hw = iw / sc / 2;
+        cvP.setView({ x0: (bx0 + bx1) / 2 - hw, x1: (bx0 + bx1) / 2 + hw, y0: (by0 + by1) / 2 - ih / sc / 2, y1: (by0 + by1) / 2 + ih / sc / 2 }); }
+      const twPx = G.tw * cvP.sx;
+      const neutral = PROJ ? '#555' : '#7fa090';
+      // 輪郭（投影: 黒く太く → 色の縁）
+      const all = [[pathIn, neutral], [path1, C.wave1], [path2, C.wave2], [pathOut, neutral]];
+      if (PROJ) all.forEach(([P]) => strokePath(P, twPx + S(7), '#000'));
+      all.forEach(([P, col]) => strokePath(P, twPx + S(PROJ ? 3 : 4.5), col, PROJ ? 1 : 0.7));
+      // 中の空気（疎密）: 密 ∝ cos 2π(φ0 − s/λ)
+      const dens = sTot => Math.cos(TAU * (phi0 - sTot / l));
+      const empty = () => 0;
+      shadePath(pathIn, s => dens(s));
+      shadePath(path1, tog.p1.get() ? (s => dens(G.Lin + s)) : empty);
+      shadePath(path2, tog.p2.get() ? (s => dens(G.Lin + s)) : empty);
+      const w1 = tog.p1.get() ? 1 : 0, w2 = tog.p2.get() ? 1 : 0;
+      shadePath(pathOut, u => (w1 * dens(G.Lin + L1() + u) + w2 * dens(G.Lin + L2() + u)) / 2);
+      drawSleeves();
+      if (tog.mk.get()) {
+        marks(pathIn, 0, phi0, 0);
+        if (w1) marks(path1, G.Lin, phi0, 0);
+        if (w2) marks(path2, G.Lin, phi0, 0);
+        if (w1 && w2) { const c = Math.cos(Math.PI * dL() / l), al = Math.abs(c); if (al > 0.12) marks(pathOut, G.Lin + (L1() + L2()) / 2, phi0, c >= 0 ? 0 : 0.5, Math.min(0.95, al)); }
+        else if (w1 || w2) marks(pathOut, G.Lin + (w1 ? L1() : L2()), phi0, 0);
+      }
+      // 取っ手と U 字管の表示
+      const yb = slideY();
+      { const gx = G.W / 2, gy = yb - G.tw / 2 - 3.2, X = cvP.px(gx), Y = cvP.py(gy), wpx = S(64), hpx = S(20);
+        cvP.line(gx, yb - G.tw / 2, gx, gy, { color: C.text, width: 3 });
+        g.save(); g.fillStyle = C.yellow; g.strokeStyle = PROJ ? '#000' : '#000'; g.lineWidth = S(1.5);
+        g.beginPath(); if (g.roundRect) g.roundRect(X - wpx / 2, Y - hpx / 2, wpx, hpx, S(6)); else g.rect(X - wpx / 2, Y - hpx / 2, wpx, hpx); g.fill(); g.stroke(); g.restore();
+        cvP.textPx('↕ 取っ手', X, Y, { color: PROJ ? '#fff' : '#000', bold: true, size: 12, bg: false });
+        cvP.textPx('U 字管（スライド）', X, Y + hpx / 2 + S(11) * TS, { color: C.wave2, bold: true, size: 12 * TS });
+      }
+      drawRuler();
+      if (tog.ar.get()) drawExtArrows();
+      // ラベル
+      tx('A', -2.6, 2.6, { color: C.text, bold: true, size: 16 });
+      tx('B', G.W + 2.6, 2.6, { color: C.text, bold: true, size: 16 });
+      cvP.dot(G.W, 0, 4, { color: C.yellow, stroke: PROJ ? '#000' : '#000' });
+      tx('経路1（固定）L₁ = ' + fmt(L1(), 1) + ' cm', G.W / 2, G.h + G.tw / 2 + 2.6, { color: C.wave1, bold: true, size: 13 });
+      tx('経路2 L₂ = ' + fmt(L2(), 1) + ' cm', G.W / 2, yb + G.tw / 2 + 2.6, { color: C.wave2, bold: true, size: 13 });
+      // 凡例（左下）
+      { const X = cvP.pad.l + S(8), Y = cvP.h - cvP.pad.b - S(64);
+        [[1, '密'], [-1, '疎']].forEach(([v, lb], i) => { const c = C.shade(v); g.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`; g.fillRect(X, Y + i * S(22), S(18), S(14)); g.strokeStyle = C.line; g.strokeRect(X, Y + i * S(22), S(18), S(14)); cvP.textPx(lb, X + S(24), Y + i * S(22) + S(7), { align: 'left', size: 12, color: C.text, bg: false }); });
+        { const c = C.shade(1); g.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`; g.fillRect(X, Y + S(44), S(18), S(14)); cvP.linePx(X + S(9), Y + S(44), X + S(9), Y + S(58), { color: PROJ ? '#000' : '#fff', width: 2.2 }); cvP.textPx('＝ 密の位置', X + S(24), Y + S(51), { align: 'left', size: 12, color: C.text, bg: false }); }
+      }
+
+      /* ===== B での y-t（記録計） ===== */
+      const Tms = 1000 / st.f, tau = phi0 * Tms, span = 3 * Tms;
+      const x0 = Math.floor(tau / span) * span;
+      cvR.clear(); cvR.setView({ x0, x1: x0 + span, y0: -2.5, y1: 2.5 });
+      cvR.axes({ xLabel: 't [ms]', yLabel: 'y', yStep: 1, xTicks: false, yTick: y => ({ '-2': '−2a', '-1': '−a', '1': 'a', '2': '2a' })[fmt(y, 0)] || '0' });
+      const ph1 = (G.Lin + L1()) / l, ph2 = (G.Lin + L2()) / l;
+      const y1 = tt => w1 * Math.sin(TAU * (tt / Tms - ph1)), y2 = tt => w2 * Math.sin(TAU * (tt / Tms - ph2));
+      cvR.clip(() => {
+        // 前のページの記録（定常状態なので同じ形）を薄く残す＝ペンがまだ通っていない部分
+        cvR.plot(tt => y1(tt) + y2(tt), { color: C.wave, width: 3, x0: tau, x1: x0 + span, alpha: PROJ ? 0.3 : 0.22 });
+        if (w1) cvR.plot(y1, { color: C.wave1, width: 1.8, dash: [7, 4], x0: tau, x1: x0 + span, alpha: PROJ ? 0.3 : 0.22 });
+        if (w2) cvR.plot(y2, { color: C.wave2, width: 1.8, dash: [7, 4], x0: tau, x1: x0 + span, alpha: PROJ ? 0.3 : 0.22 });
+        cvR.plot(tt => y1(tt) + y2(tt), { color: C.wave, width: 4, x0, x1: tau });
+        if (w1) cvR.plot(y1, { color: C.wave1, width: 2.2, dash: [7, 4], x0, x1: tau });
+        if (w2) cvR.plot(y2, { color: C.wave2, width: 2.2, dash: [7, 4], x0, x1: tau });
+      });
+      { const xs = niceStep(span, cvR.w < 500 ? 4 : 6), dg = Math.max(0, -Math.floor(Math.log10(xs) + 1e-9));
+        for (let x = Math.ceil(x0 / xs - 1e-9) * xs; x <= x0 + span + 1e-9; x += xs) cvR.textPx(fmt(x, dg), cvR.px(x), cvR.h - cvR.pad.b + S(4), { baseline: 'top', size: 11, color: C.muted, bg: false, rich: false }); }
+      cvR.dot(tau, y1(tau) + y2(tau), 5, { color: C.wave, stroke: '#000' });
+      cvR.textPx('B での合成の振幅 = ' + fmt(w1 && w2 ? 2 * ratio() : (w1 || w2 ? 1 : 0), 2) + 'a', cvR.pad.l + S(6), cvR.h - cvR.pad.b - S(12), { align: 'left', size: 12, color: C.wave, bold: true });
+
+      /* ===== 振幅 − d ===== */
+      cvA.clear(); cvA.setView({ x0: 0, x1: G.dMax, y0: 0, y1: 1.12 });
+      cvA.axes({ xLabel: 'd [cm]', yLabel: '振幅（2a を 1）', xStep: 5, yStep: 0.2 });
+      cvA.clip(() => {
+        let run = [];
+        const flush = () => { if (run.length > 1) cvA.plotPts(run, { color: C.wave, width: 2.6 }); else if (run.length === 1) cvA.dot(run[0].x, run[0].y, 2.5, { color: C.wave }); run = []; };
+        for (let i = 0; i <= NB; i++) { const v = rec[i]; if (isNaN(v)) flush(); else run.push({ x: i * 0.1, y: v }); }
+        flush();
+        cvA.line(st.d, 0, st.d, 1.12, { color: C.yellow, width: 1.2, dash: [4, 4], alpha: 0.8 });
+      });
+      cvA.dot(st.d, ratio(), 5.5, { color: C.yellow, stroke: '#000' });
+    }
+  };
+}
+
+const dbg = (window.__qk = {
+  st, G, lam, L1, L2, dL, ratio,
+  setD: x => { window.__qk._setD(x); },
+  setF: x => { window.__qk._setF(x); },
+  recCount: () => { let n = 0; for (const v of rec) if (!isNaN(v)) n++; return n; },
+  snd
+});
+
+document.addEventListener('visibilitychange', () => { if (document.hidden && snd.on) { sndStop(); syncSoundToggle(); } });
+window.addEventListener('pagehide', () => sndStop());
+function syncSoundToggle() { document.querySelectorAll('.controls label').forEach(l => { if (l.textContent.includes('音を鳴らす')) l.querySelector('input').checked = snd.on; }); }
+
+return { build: buildQuincke, period: () => st.Tanim, stopSound: () => { if (snd.on) { sndStop(); syncSoundToggle(); } } };
+})();
+
 function tabPeriod() { return (this.api && this.api.period) ? this.api.period() : 2; }
 Nami.init({
   title: 'E 応用（ホイヘンスの原理）',
@@ -1404,8 +1811,13 @@ Nami.init({
     { id: 'refract', label: '15 屈折', scrub: false, period: tabPeriod, build: buildRefract },
     { id: 'refract2', label: '16 屈折の作図と全反射', period: tabPeriod, build: buildRefract2 },
     { id: 'diffract', label: '17 回折（波動タンク）', scrub: false, period: tabPeriod, build: buildDiffract },
-    { id: 'interfere', label: '18 干渉', period: tabPeriod, build: buildInterfere }
+    { id: 'interfere', label: '18 干渉', period: tabPeriod, build: buildInterfere },
+    { id: 'quincke', label: '19 音の干渉（クインケ管）', period: QK.period, build: QK.build }
   ]
 });
+/* クインケ管の音は、ほかのタブへ移ったら止める */
+function qkGuard() { const t = Nami.app.active; if (t && t.id !== 'quincke') QK.stopSound(); }
+document.querySelector('nav.tabs').addEventListener('click', qkGuard);
+window.addEventListener('hashchange', qkGuard);
 })();
 </script></body></html>
